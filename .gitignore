@@ -1,6 +1,7 @@
 .env
 .env.*
 !.env.example
+.claude/settings.local.json
 functions/.env
 functions/.env.*
 !functions/.env.example

@@ -91,6 +91,7 @@ const state = {
   localWritePending: false,
   localWriteBlockUntil: 0,
   trackerDrag: null,
+  accessRequests: [],
   demoMode: new URLSearchParams(window.location.search).has("demo")
 };
 
@@ -459,6 +460,14 @@ function setupRealtimeSync() {
         };
       }
     });
+    subscriptions.splice(2, 0, {
+      path: `tenantAccessRequests/${state.tenantId}`,
+      apply: (value) => {
+        state.accessRequests = Object.values(value || {})
+          .filter((request) => request?.status === "pending")
+          .sort((a, b) => Number(b.requestedAt || b.updatedAt || 0) - Number(a.requestedAt || a.updatedAt || 0));
+      }
+    });
   }
 
   let initialCallbacks = subscriptions.length;
@@ -639,6 +648,8 @@ function handleClick(event) {
     cycleDifficulty: () => cycleDemandDifficulty(button.dataset.id, button),
     openPersonDialog: () => openPersonDialog(button.dataset.id),
     deletePerson: () => deletePerson(button.dataset.id),
+    approveAccessRequest: () => approveAccessRequest(button.dataset.uid),
+    rejectAccessRequest: () => rejectAccessRequest(button.dataset.uid),
     togglePersonDemandType: () => togglePersonDemandType(button.dataset.person, button.dataset.type, button),
     setColorValue: () => setColorValue(button),
     agendaPrev: () => moveAgenda(-1),
@@ -700,6 +711,8 @@ function canRunAction(action, button) {
     "deleteWeek",
     "openPersonDialog",
     "deletePerson",
+    "approveAccessRequest",
+    "rejectAccessRequest",
     "togglePersonDemandType",
     "openPlanDialog",
     "exportTracker",
@@ -1672,6 +1685,20 @@ function renderTeam() {
   return `
     <section class="krio-tracker">
       ${trackerSectionHead("Equipe", "Perfis, acesso e tarefas atribuídas para cada colaborador.", `<button class="krio-btn primary" type="button" data-action="openPersonDialog">${icons.plus} Pessoa</button>`)}
+      ${state.accessRequests.length ? `
+        <div class="tracker-list team-assignment-list">
+          ${state.accessRequests.map((request) => `
+            <div class="tracker-profile-item team-assignment-card">
+              <div class="tracker-profile-left">
+                <span class="tracker-profile-dot" style="background:#FBBF24"></span>
+                <div><strong>${esc(request.userName || request.email || "Solicitação")}</strong><span>${esc(request.email || "")} · ${esc(roleRequestLabel(request.role || "member"))}</span></div>
+              </div>
+              <div class="tracker-toolbar">
+                <button class="krio-btn small primary" type="button" data-action="approveAccessRequest" data-uid="${attr(request.uid)}">Aprovar</button>
+                <button class="krio-btn small danger" type="button" data-action="rejectAccessRequest" data-uid="${attr(request.uid)}">Recusar</button>
+              </div>
+            </div>`).join("")}
+        </div>` : ""}
       <div class="tracker-list team-assignment-list">
         ${getProfiles().map((person) => `
           <div class="tracker-profile-item team-assignment-card">
@@ -2182,7 +2209,7 @@ function openDemandDialog(id = "", defaults = {}) {
       <div class="tracker-dialog-backdrop" data-dialog-backdrop>
         <div class="tracker-dialog tracker-dialog-compact" role="dialog" aria-modal="true">
           <div class="tracker-dialog-head">
-            <strong>Sem tarefas atribuÃ­das</strong>
+            <strong>Sem tarefas atribuídas</strong>
             <button class="krio-icon-btn" type="button" data-action="closeDialog" aria-label="Fechar">${icons.close}</button>
           </div>
           <p class="tracker-dialog-copy">Ative pelo menos um tipo de tarefa para este membro na aba Equipe.</p>
@@ -2314,7 +2341,7 @@ function openPersonDialog(id = "") {
             <input class="krio-input" name="role" value="${attr(person?.role || "")}" placeholder="Designer, Social media...">
           </label>
           ${colorPickerField("Cor", "color", person?.color || "#3B82F6", "tracker-field")}
-          <div class="tracker-field">Tarefas atribuÃ­das
+          <div class="tracker-field">Tarefas atribuídas
             <div class="assignment-check-grid">
               ${demandTypes.map((type) => `
                 <label class="assignment-check">
@@ -3020,6 +3047,79 @@ function accessRoleLabel(role) {
   return { owner: "Owner", admin: "Admin", member: "Colaborador" }[role] || "Colaborador";
 }
 
+function roleRequestLabel(role) {
+  return {
+    member: "Colaborador",
+    designer: "Designer",
+    editor_video: "Editor de video",
+    fotografo: "Fotografo",
+    videomaker: "Videomaker"
+  }[role] || accessRoleLabel(role);
+}
+
+async function approveAccessRequest(uid) {
+  if (!uid || !state.firebase?.db || state.demoMode || state.tenantId === "local" || !canManageWorkspace()) return;
+  const request = state.accessRequests.find((item) => item.uid === uid);
+  if (!request) return;
+  const now = Date.now();
+  const roleText = roleRequestLabel(request.role || "member");
+  const color = colorFromString(request.email || request.userName || uid);
+  const profile = {
+    id: uid,
+    name: request.userName || request.email || "Colaborador",
+    role: roleText,
+    color,
+    authUid: uid,
+    accessUid: uid,
+    accessRole: "member",
+    assignedTypes: defaultAssignedDemandTypes(),
+    createdAt: now
+  };
+  const membership = {
+    role: "member",
+    status: "active",
+    tenantId: state.tenantId,
+    updatedAt: now,
+    invitedBy: state.user?.uid || ""
+  };
+  state.data.profiles[uid] = profile;
+  state.data.tracker.weeks.forEach((week) => ensureWeekPerson(week, uid));
+  try {
+    await state.firebase.update(state.firebase.ref(state.firebase.db), {
+      [`tenants/${state.tenantId}/profiles/${uid}`]: profile,
+      [`memberships/${uid}/${state.tenantId}`]: membership,
+      [`tenantAccessRequests/${state.tenantId}/${uid}/status`]: "approved",
+      [`tenantAccessRequests/${state.tenantId}/${uid}/approvedAt`]: now,
+      [`tenantAccessRequests/${state.tenantId}/${uid}/updatedAt`]: now,
+      [`accessRequests/${uid}/status`]: "approved",
+      [`accessRequests/${uid}/tenantId`]: state.tenantId,
+      [`accessRequests/${uid}/approvedAt`]: now,
+      [`accessRequests/${uid}/updatedAt`]: now
+    });
+    state.accessRequests = state.accessRequests.filter((item) => item.uid !== uid);
+    saveAndRender();
+  } catch (error) {
+    setSyncState("offline", "Não foi possível aprovar o colaborador.");
+  }
+}
+
+async function rejectAccessRequest(uid) {
+  if (!uid || !state.firebase?.db || state.demoMode || state.tenantId === "local" || !canManageWorkspace()) return;
+  const now = Date.now();
+  try {
+    await state.firebase.update(state.firebase.ref(state.firebase.db), {
+      [`tenantAccessRequests/${state.tenantId}/${uid}/status`]: "rejected",
+      [`tenantAccessRequests/${state.tenantId}/${uid}/updatedAt`]: now,
+      [`accessRequests/${uid}/status`]: "rejected",
+      [`accessRequests/${uid}/updatedAt`]: now
+    });
+    state.accessRequests = state.accessRequests.filter((item) => item.uid !== uid);
+    render();
+  } catch (error) {
+    setSyncState("offline", "Não foi possível recusar a solicitação.");
+  }
+}
+
 async function grantWorkspaceMembership(uid, role = "member") {
   if (!state.firebase?.db || state.demoMode || state.tenantId === "local" || !canManageWorkspace()) return;
   const safeRole = role === "admin" ? "admin" : "member";
@@ -3072,7 +3172,7 @@ function deleteCurrentWeek() {
     quarantineUntil: now + (40 * 24 * 60 * 60 * 1000),
     deletedBy: {
       uid: state.user?.uid || "local",
-      name: state.user?.displayName || state.user?.email || "UsuÃ¡rio"
+      name: state.user?.displayName || state.user?.email || "Usuário"
     },
     deletedByUid: state.user?.uid || "local",
     week: removed
@@ -3392,8 +3492,8 @@ function openAgendaEventDialog(id = "", date = "") {
           <button class="krio-icon-btn" type="button" data-action="closeDialog" aria-label="Fechar">${icons.close}</button>
         </div>
         <form id="agendaEventForm" class="tracker-form" data-id="${attr(id)}">
-          <label class="tracker-field">TÃ­tulo
-            <input class="krio-input" name="title" required value="${attr(event?.title || "")}" placeholder="Ex: ReuniÃ£o de alinhamento">
+          <label class="tracker-field">Título
+            <input class="krio-input" name="title" required value="${attr(event?.title || "")}" placeholder="Ex: Reunião de alinhamento">
           </label>
           <div class="form-row">
             <label class="tracker-field">Tipo
@@ -3406,14 +3506,14 @@ function openAgendaEventDialog(id = "", date = "") {
             </label>
           </div>
           <div class="form-row">
-            <label class="tracker-field">InÃ­cio
+            <label class="tracker-field">Início
               <input class="krio-input" name="time" type="time" value="${attr(event?.time || "")}">
             </label>
             <label class="tracker-field">Fim
               <input class="krio-input" name="endTime" type="time" value="${attr(event?.endTime || "")}">
             </label>
           </div>
-          <label class="tracker-field">ObservaÃ§Ãµes
+          <label class="tracker-field">Observações
             <textarea class="tracker-textarea" name="desc" placeholder="Contexto, link ou participantes">${esc(event?.desc || "")}</textarea>
           </label>
           <div class="tracker-dialog-actions">

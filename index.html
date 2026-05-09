@@ -277,6 +277,7 @@ body::after {
 .stack { display: grid; gap: 13px; }
 
 .field { display: grid; gap: 6px; }
+.field.hidden { display: none; }
 
 .label {
   font-size: 11px;
@@ -302,6 +303,13 @@ body::after {
 }
 
 .input::placeholder { color: var(--muted-2); }
+
+select.input { appearance: none; }
+
+.input option {
+  background: #171421;
+  color: var(--text);
+}
 
 .input:hover { border-color: var(--line-mid); }
 
@@ -1002,7 +1010,7 @@ body::after {
           <div class="auth-wrap" id="authMain">
             <div class="auth-inner">
               <h1 class="auth-heading">Bem-vindo ao Krio</h1>
-              <p class="auth-sub">Gestão criativa para agências. Acesso liberado após o fechamento comercial.</p>
+              <p class="auth-sub">Gestão criativa para agências. Crie seu workspace ou entre como colaborador da equipe.</p>
 
               <!-- Tab switcher -->
               <div class="switcher">
@@ -1014,12 +1022,29 @@ body::after {
               <form id="signupForm" class="form active" novalidate>
                 <div class="stack">
                   <div class="field">
+                    <label class="label" for="signupMode">Tipo de conta</label>
+                    <select class="input" id="signupMode">
+                      <option value="owner">Criar workspace como admin</option>
+                      <option value="collaborator">Entrar como colaborador</option>
+                    </select>
+                  </div>
+                  <div class="field">
                     <label class="label" for="signupAgency">Agência</label>
                     <input class="input" id="signupAgency" type="text" placeholder="Nome da sua agência" autocomplete="organization" required />
                   </div>
+                  <div class="field hidden" id="signupRoleField">
+                    <label class="label" for="signupRole">Função</label>
+                    <select class="input" id="signupRole">
+                      <option value="member">Colaborador</option>
+                      <option value="designer">Designer</option>
+                      <option value="editor_video">Editor de video</option>
+                      <option value="fotografo">Fotografo</option>
+                      <option value="videomaker">Videomaker</option>
+                    </select>
+                  </div>
                   <div class="field">
-                    <label class="label" for="signupName">Seu nome</label>
-                    <input class="input" id="signupName" type="text" placeholder="Nome completo" autocomplete="name" required />
+                    <label class="label" for="signupName">Apelido</label>
+                    <input class="input" id="signupName" type="text" placeholder="Nome exibido no perfil" autocomplete="name" required />
                   </div>
                   <div class="field">
                     <label class="label" for="signupEmail">Email</label>
@@ -1031,7 +1056,7 @@ body::after {
                   </div>
                 </div>
                 <div class="actions">
-                  <button class="btn-primary" type="submit">Solicitar liberação</button>
+                  <button class="btn-primary" id="signupSubmitBtn" type="submit">Criar workspace</button>
                   <div class="divider-row">
                     <div class="divider-line"></div>
                     <span class="divider-text">ou</span>
@@ -1079,7 +1104,7 @@ body::after {
                     Continuar com Google
                   </button>
                 </div>
-                <p class="helper">Sem acesso ainda? <a href="#" id="helperToSignup">Solicitar liberação</a></p>
+                <p class="helper">Sem acesso ainda? <a href="#" id="helperToSignup">Criar conta</a></p>
               </form>
 
               <div id="message" class="msg" role="alert" aria-live="polite"></div>
@@ -1278,6 +1303,11 @@ const helperToLogin = document.getElementById('helperToLogin');
 const helperToSignup = document.getElementById('helperToSignup');
 const signupForm = document.getElementById('signupForm');
 const loginForm = document.getElementById('loginForm');
+const signupMode = document.getElementById('signupMode');
+const signupAgency = document.getElementById('signupAgency');
+const signupRole = document.getElementById('signupRole');
+const signupRoleField = document.getElementById('signupRoleField');
+const signupSubmitBtn = document.getElementById('signupSubmitBtn');
 const authView = document.getElementById('authView');
 const sessionView = document.getElementById('sessionView');
 const sessionMeta = document.getElementById('sessionMeta');
@@ -1303,6 +1333,34 @@ function hideMessage(){
   message.className = 'msg'; message.textContent = '';
 }
 
+function pathKey(value=''){
+  return String(value || '').trim().replace(/[.#$\[\]\/]/g,'_');
+}
+
+function normalizeEmail(email=''){
+  return String(email || '').trim().toLowerCase();
+}
+
+function emailDomain(email=''){
+  return normalizeEmail(email).split('@')[1] || '';
+}
+
+function domainKey(email=''){
+  return pathKey(emailDomain(email));
+}
+
+function slugify(text=''){
+  return text.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim().replace(/[^a-z0-9]+/g,'-').replace(/(^-|-$)/g,'').slice(0,48) || 'workspace';
+}
+
+function updateSignupMode(){
+  const ownerMode = signupMode.value === 'owner';
+  signupAgency.closest('.field').classList.toggle('hidden', !ownerMode);
+  signupRoleField.classList.toggle('hidden', ownerMode);
+  signupAgency.required = ownerMode;
+  signupSubmitBtn.textContent = ownerMode ? 'Criar workspace' : 'Solicitar entrada';
+}
+
 async function ensureUserNode(user, nameFallback=''){
   const userRef = ref(db,`users/${user.uid}`);
   const snap = await get(userRef);
@@ -1322,6 +1380,129 @@ async function getActiveMembership(user){
   const memberships = snap.val() || {};
   const tenantId = Object.keys(memberships).find((id) => memberships[id]?.status === 'active');
   return tenantId ? { tenantId, membership: memberships[tenantId] } : null;
+}
+
+async function createOwnerWorkspace(user,{agencyName='',userName=''}={}){
+  const now = Date.now();
+  const tenantId = `tenant_${user.uid}`;
+  const agency = agencyName || user.email?.split('@')[1]?.split('.')[0] || 'Minha Agência';
+  const name = user.displayName || userName || user.email?.split('@')[0] || 'Owner';
+  const domain = domainKey(user.email);
+  const tenant = {
+    meta: {
+      name: agency,
+      slug: slugify(agency),
+      plan: 'manual_license',
+      licenseStatus: 'active',
+      licenseType: 'self_service',
+      licenseActivatedAt: now,
+      billingStatus: 'self_service',
+      status: 'active',
+      createdAt: now,
+      ownerUid: user.uid
+    },
+    billing: {
+      status: 'self_service',
+      provider: 'self_service',
+      activatedAt: now
+    },
+    brand: {
+      name: 'Krio',
+      primary: '#3B82F6',
+      accent: '#60A5FA'
+    },
+    settings: {
+      timezone: 'America/Sao_Paulo',
+      locale: 'pt-BR'
+    },
+    profiles: {
+      [user.uid]: {
+        id: user.uid,
+        name,
+        role: 'Owner',
+        color: '#3B82F6',
+        authUid: user.uid,
+        accessUid: user.uid,
+        accessRole: 'admin',
+        assignedTypes: ['mensal','avulso','aprovacao','agendamento','planejamento'],
+        createdAt: now
+      }
+    },
+    tracker: {
+      weeks: [],
+      events: [],
+      trash: []
+    },
+    approval: {
+      clients: {}
+    },
+    planning: {},
+    clients: {},
+    updatedAt: now
+  };
+  const membership = {
+    role: 'owner',
+    status: 'active',
+    tenantId,
+    createdAt: now,
+    licenseType: 'self_service'
+  };
+  const updates = {
+    [`tenants/${tenantId}`]: tenant,
+    [`memberships/${user.uid}/${tenantId}`]: membership
+  };
+  if(domain) {
+    updates[`tenantDomains/${domain}/${tenantId}`] = {
+      tenantId,
+      name: agency,
+      slug: tenant.meta.slug,
+      ownerUid: user.uid,
+      createdAt: now
+    };
+  }
+  await update(ref(db), updates);
+  return { status:'active', tenantId, membership };
+}
+
+async function findTenantByDomain(email){
+  const key = domainKey(email);
+  if(!key) return null;
+  const snap = await get(ref(db,`tenantDomains/${key}`));
+  const entries = Object.entries(snap.val() || {});
+  if(!entries.length) return null;
+  entries.sort((a,b) => Number(b[1]?.createdAt || 0) - Number(a[1]?.createdAt || 0));
+  return { tenantId: entries[0][0], ...(entries[0][1] || {}) };
+}
+
+async function requestCollaboratorAccess(user,{userName='',role='member'}={}){
+  const tenant = await findTenantByDomain(user.email);
+  if(!tenant?.tenantId) {
+    return {
+      status:'blocked',
+      request: {
+        reason: 'Nenhum workspace encontrado para o domínio deste email. Peça para o admin criar o workspace ou liberar seu acesso.'
+      }
+    };
+  }
+  const now = Date.now();
+  const request = {
+    uid: user.uid,
+    tenantId: tenant.tenantId,
+    agencyName: tenant.name || 'Workspace',
+    userName: user.displayName || userName || user.email?.split('@')[0] || 'Usuário',
+    email: user.email || '',
+    photoURL: user.photoURL || '',
+    role: role || 'member',
+    status: 'pending',
+    source: 'collaborator',
+    requestedAt: now,
+    updatedAt: now
+  };
+  await update(ref(db), {
+    [`accessRequests/${user.uid}`]: request,
+    [`tenantAccessRequests/${tenant.tenantId}/${user.uid}`]: request
+  });
+  return { status:'pending', request };
 }
 
 async function requestManualAccess(user,{agencyName='',userName='',source='email'}={}){
@@ -1350,12 +1531,18 @@ async function resolveAccess(user,context={}){
   await ensureUserNode(user,context.userName || '');
   const active = await getActiveMembership(user);
   if(active) return { status:'active', ...active };
+  if(context.mode === 'owner') return createOwnerWorkspace(user,context);
+  if(context.mode === 'collaborator') return requestCollaboratorAccess(user,context);
   const request = await requestManualAccess(user,context);
   return { status: request.status || 'pending', request };
 }
 
 function mapAuthError(error){
   const code = error?.code || '';
+  const host = window.location.hostname || 'este domínio';
+  if(code === 'auth/unauthorized-domain'){
+    return `Google não está liberado para ${host} no Firebase Auth. Use email e senha agora, ou adicione este domínio em Firebase Console > Authentication > Settings > Authorized domains.`;
+  }
   const map = {
     'auth/email-already-in-use':'Este email já está cadastrado. Entre com sua senha para acompanhar a liberação.',
     'auth/invalid-email':'Email inválido.',
@@ -1382,8 +1569,9 @@ function buildSessionMeta(user, access){
   const tenantId = access?.tenantId || null;
   const role = access?.membership?.role || null;
   const isPending = access?.status !== 'active';
+  const blockedReason = access?.request?.reason || '';
   const statusBadge = isPending
-    ? '<span class="status-badge pending">Aguardando liberação</span>'
+    ? `<span class="status-badge pending">${blockedReason ? 'Sem workspace' : 'Aguardando aprovação'}</span>`
     : '<span class="status-badge active">Acesso ativo</span>';
 
   sessionMeta.innerHTML = `
@@ -1440,6 +1628,8 @@ function buildSessionMeta(user, access){
     </div>` : ''}
   `;
   pendingNotice.style.display = isPending ? 'block' : 'none';
+  if (blockedReason) pendingNotice.querySelector('p').textContent = blockedReason;
+  else pendingNotice.querySelector('p').textContent = 'Sua solicitação está na fila do administrador do workspace. Você será liberado quando o acesso for aprovado.';
 }
 
 async function renderSession(user, access){
@@ -1456,7 +1646,8 @@ async function enterIfActive(user,context={}){
     return true;
   }
   await renderSession(user,access);
-  showMessage('Solicitação registrada. Aguarde a liberação manual pelo administrador.', 'success');
+  if(access.status === 'pending') showMessage('Solicitação registrada. Aguarde aprovação pelo administrador do workspace.', 'success');
+  if(access.status === 'blocked') showMessage(access.request?.reason || 'Não foi possível vincular este acesso.');
   return false;
 }
 
@@ -1464,18 +1655,23 @@ tabSignup.addEventListener('click', showSignup);
 tabLogin.addEventListener('click', showLogin);
 helperToLogin.addEventListener('click', (e)=>{e.preventDefault();showLogin();});
 helperToSignup.addEventListener('click', (e)=>{e.preventDefault();showSignup();});
+signupMode.addEventListener('change', updateSignupMode);
+updateSignupMode();
 
 signupForm.addEventListener('submit', async (e)=>{
   e.preventDefault(); hideMessage();
-  const agencyName = document.getElementById('signupAgency').value.trim();
+  const mode = signupMode.value;
+  const agencyName = signupAgency.value.trim();
+  const role = signupRole.value;
   const userName = document.getElementById('signupName').value.trim();
   const email = document.getElementById('signupEmail').value.trim();
   const password = document.getElementById('signupPassword').value;
   try {
     isBootstrapping = true;
+    if(mode === 'owner' && !agencyName) throw new Error('Informe o nome da agência para criar o workspace.');
     const { user } = await createUserWithEmailAndPassword(auth, email, password);
     if(userName) await updateProfile(user,{displayName:userName});
-    await enterIfActive(auth.currentUser || user,{agencyName,userName,source:'signup'});
+    await enterIfActive(auth.currentUser || user,{agencyName,userName,role,mode,source:'signup'});
   } catch(error) { showMessage(mapAuthError(error)); }
   finally { isBootstrapping = false; }
 });
@@ -1496,8 +1692,12 @@ async function handleGoogleAuth(){
   try {
     isBootstrapping = true; hideMessage();
     const { user } = await signInWithPopup(auth, provider);
-    const agencyName = user.email?.split('@')[1]?.split('.')[0] || 'Minha Agência';
-    await enterIfActive(user,{agencyName, userName:user.displayName||'', source:'google'});
+    const signupVisible = signupForm.classList.contains('active');
+    const mode = signupVisible ? signupMode.value : 'login';
+    const agencyName = signupVisible && mode === 'owner'
+      ? (signupAgency.value.trim() || user.email?.split('@')[1]?.split('.')[0] || 'Minha Agência')
+      : '';
+    await enterIfActive(user,{agencyName, userName:user.displayName||'', role: signupRole.value, mode, source:'google'});
   } catch(error) { showMessage(mapAuthError(error)); }
   finally { isBootstrapping = false; }
 }
