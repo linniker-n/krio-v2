@@ -1,0 +1,114 @@
+{
+  "rules": {
+    "users": {
+      "$uid": {
+        ".read": "auth != null && auth.uid == $uid",
+        ".write": "auth != null && auth.uid == $uid"
+      }
+    },
+    "memberships": {
+      "$uid": {
+        ".read": "auth != null && auth.uid == $uid",
+        "$tenantId": {
+          ".write": "auth != null && root.child('memberships').child(auth.uid).child($tenantId).child('status').val() == 'active' && (root.child('memberships').child(auth.uid).child($tenantId).child('role').val() == 'owner' || root.child('memberships').child(auth.uid).child($tenantId).child('role').val() == 'admin') && (!newData.exists() || (newData.child('status').val() == 'active' && (newData.child('role').val() == 'admin' || newData.child('role').val() == 'member')))"
+        }
+      }
+    },
+    "accessRequests": {
+      "$uid": {
+        ".read": "auth != null && auth.uid == $uid",
+        ".write": "auth != null && auth.uid == $uid && (!data.exists() || data.child('status').val() == 'pending') && newData.child('uid').val() == auth.uid && newData.child('status').val() == 'pending'",
+        ".validate": "newData.hasChildren(['uid', 'email', 'agencyName', 'status', 'requestedAt'])"
+      }
+    },
+    "tenants": {
+      "$tenantId": {
+        ".read": false,
+        ".write": false,
+        "meta": {
+          ".read": "auth != null && root.child('memberships').child(auth.uid).child($tenantId).child('status').val() == 'active'",
+          "name": {
+            ".write": "auth != null && root.child('memberships').child(auth.uid).child($tenantId).child('role').val() == 'owner'"
+          },
+          "slug": {
+            ".write": "auth != null && root.child('memberships').child(auth.uid).child($tenantId).child('role').val() == 'owner'"
+          },
+          "plan": {
+            ".write": false
+          },
+          "licenseStatus": {
+            ".write": false
+          },
+          "licenseType": {
+            ".write": false
+          },
+          "billingStatus": {
+            ".write": false
+          },
+          "trialEndsAt": {
+            ".write": false
+          },
+          "status": {
+            ".write": false
+          },
+          "ownerUid": {
+            ".write": false
+          },
+          "createdAt": {
+            ".write": false
+          }
+        },
+        "billing": {
+          ".read": "auth != null && (root.child('memberships').child(auth.uid).child($tenantId).child('role').val() == 'owner' || root.child('memberships').child(auth.uid).child($tenantId).child('role').val() == 'admin')",
+          ".write": false
+        },
+        "profiles": {
+          ".read": "auth != null && root.child('memberships').child(auth.uid).child($tenantId).child('status').val() == 'active'",
+          ".write": "auth != null && (root.child('memberships').child(auth.uid).child($tenantId).child('role').val() == 'owner' || root.child('memberships').child(auth.uid).child($tenantId).child('role').val() == 'admin')"
+        },
+        "tracker": {
+          "weeks": {
+            ".read": "auth != null && root.child('memberships').child(auth.uid).child($tenantId).child('status').val() == 'active'",
+            ".write": "auth != null && root.child('memberships').child(auth.uid).child($tenantId).child('status').val() == 'active'"
+          },
+          "events": {
+            ".read": "auth != null && root.child('memberships').child(auth.uid).child($tenantId).child('status').val() == 'active'",
+            ".write": "auth != null && root.child('memberships').child(auth.uid).child($tenantId).child('status').val() == 'active'"
+          }
+        },
+        "trash": {
+          ".read": "auth != null && (root.child('memberships').child(auth.uid).child($tenantId).child('role').val() == 'owner' || root.child('memberships').child(auth.uid).child($tenantId).child('role').val() == 'admin')",
+          ".write": "auth != null && (root.child('memberships').child(auth.uid).child($tenantId).child('role').val() == 'owner' || root.child('memberships').child(auth.uid).child($tenantId).child('role').val() == 'admin')",
+          "$uid": {
+            ".read": "auth != null && (auth.uid == $uid || root.child('memberships').child(auth.uid).child($tenantId).child('role').val() == 'owner' || root.child('memberships').child(auth.uid).child($tenantId).child('role').val() == 'admin')",
+            ".write": "auth != null && (auth.uid == $uid || root.child('memberships').child(auth.uid).child($tenantId).child('role').val() == 'owner' || root.child('memberships').child(auth.uid).child($tenantId).child('role').val() == 'admin')"
+          }
+        },
+        "approval": {
+          ".read": "auth != null && root.child('memberships').child(auth.uid).child($tenantId).child('status').val() == 'active'",
+          ".write": "auth != null && root.child('memberships').child(auth.uid).child($tenantId).child('status').val() == 'active'"
+        },
+        "planning": {
+          ".read": "auth != null && (root.child('memberships').child(auth.uid).child($tenantId).child('role').val() == 'owner' || root.child('memberships').child(auth.uid).child($tenantId).child('role').val() == 'admin')",
+          ".write": "auth != null && (root.child('memberships').child(auth.uid).child($tenantId).child('role').val() == 'owner' || root.child('memberships').child(auth.uid).child($tenantId).child('role').val() == 'admin')"
+        },
+        "clients": {
+          ".read": "auth != null && (root.child('memberships').child(auth.uid).child($tenantId).child('role').val() == 'owner' || root.child('memberships').child(auth.uid).child($tenantId).child('role').val() == 'admin')",
+          ".write": "auth != null && (root.child('memberships').child(auth.uid).child($tenantId).child('role').val() == 'owner' || root.child('memberships').child(auth.uid).child($tenantId).child('role').val() == 'admin')"
+        },
+        "brand": {
+          ".read": "auth != null && root.child('memberships').child(auth.uid).child($tenantId).child('status').val() == 'active'",
+          ".write": "auth != null && (root.child('memberships').child(auth.uid).child($tenantId).child('role').val() == 'owner' || root.child('memberships').child(auth.uid).child($tenantId).child('role').val() == 'admin')"
+        },
+        "settings": {
+          ".read": "auth != null && (root.child('memberships').child(auth.uid).child($tenantId).child('role').val() == 'owner' || root.child('memberships').child(auth.uid).child($tenantId).child('role').val() == 'admin')",
+          ".write": "auth != null && (root.child('memberships').child(auth.uid).child($tenantId).child('role').val() == 'owner' || root.child('memberships').child(auth.uid).child($tenantId).child('role').val() == 'admin')"
+        },
+        "updatedAt": {
+          ".read": "auth != null && root.child('memberships').child(auth.uid).child($tenantId).child('status').val() == 'active'",
+          ".write": "auth != null && root.child('memberships').child(auth.uid).child($tenantId).child('status').val() == 'active'"
+        }
+      }
+    }
+  }
+}

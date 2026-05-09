@@ -1,0 +1,56 @@
+{
+  "database": {
+    "rules": "database.rules.json"
+  },
+  "hosting": {
+    "public": ".",
+    "ignore": [
+      "firebase.json",
+      ".firebaserc",
+      "**/.*",
+      "**/node_modules/**",
+      "package.json",
+      "package-lock.json",
+      "firebase-debug.log",
+      "firebase-debug.*.log",
+      "scripts/*.ps1",
+      "scripts/smoke-test.mjs",
+      "functions/**",
+      "PRODUCTIZATION.md",
+      "GO_LIVE.md",
+      "firebase-rules.example.json",
+      "database.rules.json",
+      "KRIO V2.zip"
+    ],
+    "headers": [
+      {
+        "source": "**/*.@(js|css)",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "public,max-age=3600"
+          }
+        ]
+      },
+      {
+        "source": "**/*.@(html)",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-cache"
+          }
+        ]
+      }
+    ],
+    "rewrites": [
+      {
+        "source": "/app",
+        "destination": "/app.html"
+      },
+      {
+        "source": "/login",
+        "destination": "/index.html"
+      }
+    ]
+  }
+}

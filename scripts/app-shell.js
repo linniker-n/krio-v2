@@ -1,0 +1,4593 @@
+const firebaseConfig = {
+  apiKey: "AIzaSyDIg5h2gdXTXVRKYwtvpbqEDlJWxue81Ow",
+  authDomain: "krio-app-fe0c3.firebaseapp.com",
+  databaseURL: "https://krio-app-fe0c3-default-rtdb.firebaseio.com",
+  projectId: "krio-app-fe0c3",
+  appId: "1:527271527417:web:f320fac3656b6914ae3328"
+};
+
+const views = {
+  tracker: {
+    title: "Tracker",
+    subtitle: "Demandas, semanas e produção da equipe."
+  },
+  operations: {
+    title: "Operação",
+    subtitle: "Leitura operacional em tempo real."
+  },
+  approval: {
+    title: "Aprovação",
+    subtitle: "Clientes, peças e retornos centralizados."
+  }
+};
+
+const LICENSE_PRODUCT = {
+  id: "manual_license",
+  name: "Licença ativa",
+  price: "Venda direta",
+  description: "Acesso integral liberado manualmente após fechamento comercial.",
+  limits: { profiles: Infinity, clients: Infinity, creatives: Infinity, demands: Infinity },
+  features: ["tracker", "approval", "operations", "reports", "manualAccess"]
+};
+
+const demandTypes = [
+  { id: "mensal", label: "Mensal" },
+  { id: "avulso", label: "Avulso" },
+  { id: "aprovacao", label: "Aprovação" },
+  { id: "agendamento", label: "Agendamento" },
+  { id: "planejamento", label: "Planejamento" }
+];
+
+const agendaEventTypes = [
+  { id: "meeting", label: "Reunião" },
+  { id: "delivery", label: "Entrega" },
+  { id: "briefing", label: "Briefing" },
+  { id: "internal", label: "Interno" }
+];
+
+const approvalStatuses = {
+  prov: "Provisório",
+  internalApproved: "Aprovado internamente",
+  internalRejected: "Reprovado internamente",
+  clientReview: "Quadro do cliente",
+  scheduled: "Agendamento",
+  posted: "Postados",
+};
+
+const approvalStatusTabs = [
+  { id: "prov", label: "Provisório" },
+  { id: "internalApproved", label: "Interno" },
+  { id: "internalRejected", label: "Refação" },
+  { id: "clientReview", label: "Cliente" },
+  { id: "scheduled", label: "Agendamento" },
+  { id: "posted", label: "Postados" },
+];
+
+const approvalStatusAliases = {
+  aprov: "internalApproved",
+  reprov: "internalRejected",
+  post: "posted",
+};
+
+const state = {
+  firebase: null,
+  user: null,
+  tenantId: "demo",
+  membership: { role: "owner", status: "active" },
+  tenantMeta: {},
+  data: null,
+  activeView: "tracker",
+  trackerView: "week",
+  trackerFilter: "all",
+  currentWeekIndex: 0,
+  agendaView: "month",
+  agendaCursor: isoDate(new Date()),
+  approvalClientId: null,
+  approvalStatus: "prov",
+  saveTimer: null,
+  timerTick: null,
+  realtimeUnsubs: [],
+  realtimeRenderTimer: null,
+  localWritePending: false,
+  localWriteBlockUntil: 0,
+  trackerDrag: null,
+  demoMode: new URLSearchParams(window.location.search).has("demo")
+};
+
+const icons = {
+  plus: '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg>',
+  week: '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="3" width="12" height="11" rx="2"/><path d="M5 1.8v2.6M11 1.8v2.6M2 6.5h12"/></svg>',
+  agenda: '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 2.5h10a1 1 0 0 1 1 1V13a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V3.5a1 1 0 0 1 1-1Z"/><path d="M5 1v3M11 1v3M2 6h12"/></svg>',
+  report: '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 13V7M8 13V3M13 13V5"/><path d="M2 13.5h12"/></svg>',
+  history: '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3.5 4.5A6 6 0 1 1 2 8.5"/><path d="M2 3v4h4M8 5v3.5l2.4 1.4"/></svg>',
+  trash: '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2.5 4h11M6 4V2.5h4V4M4 4l.7 9h6.6L12 4"/><path d="M7 6.5v4M9 6.5v4"/></svg>',
+  team: '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6" cy="5" r="2.5"/><path d="M2 13c.6-2 2-3 4-3s3.4 1 4 3"/><circle cx="11.5" cy="6" r="1.7"/><path d="M10.5 10.2c1.6.2 2.7 1 3.2 2.3"/></svg>',
+  settings: '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.5v2M8 12.5v2M2.4 4.3l1.7 1M11.9 10.7l1.7 1M1.5 8h2M12.5 8h2M2.4 11.7l1.7-1M11.9 5.3l1.7-1"/></svg>',
+  close: '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg>',
+  edit: '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9.5 3.2 12.8 6.5 6 13.3 2.7 14l.7-3.3 6.1-7.5Z"/><path d="m8.5 4.2 3.3 3.3"/></svg>',
+  check: '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m3.2 8.3 3 3L12.8 4.7"/></svg>',
+  play: '<svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor"><path d="M5 3.5v9l7-4.5-7-4.5Z"/></svg>',
+  pause: '<svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor"><path d="M5 3h2v10H5zM9 3h2v10H9z"/></svg>',
+  upload: '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 11V3"/><path d="m4.8 6.2 3.2-3.2 3.2 3.2"/><path d="M3 10.5V13h10v-2.5"/></svg>',
+  send: '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2 7 14l-1.5-5.5L1 6.5 14 2Z"/><path d="m5.5 8.5 3-2.5"/></svg>',
+  calendar: '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2.5" y="3.5" width="11" height="10" rx="2"/><path d="M5.5 2v3M10.5 2v3M2.5 6.5h11"/></svg>',
+  sync: '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M13 5a5 5 0 0 0-8.4-2.2L3 4.5"/><path d="M3 2v2.5h2.5M3 11a5 5 0 0 0 8.4 2.2L13 11.5"/><path d="M13 14v-2.5h-2.5"/></svg>',
+  print: '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 5V2h8v3M4 11H3a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-1"/><path d="M4 9h8v5H4z"/></svg>',
+  back: '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M10 3 5 8l5 5"/></svg>',
+  comment: '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M3 3.5h10v7H7l-3.2 2.6V10.5H3z"/></svg>'
+};
+
+const $ = (selector, root = document) => root.querySelector(selector);
+
+boot();
+
+async function boot() {
+  setupShellEvents();
+  ensureDialogHosts();
+
+  if (state.demoMode) {
+    state.user = { uid: "demo_user", displayName: "Krio Demo", email: "demo@krio.app" };
+    state.membership = { role: "owner", status: "active" };
+    state.data = loadLocalState() || seedData(state.user);
+    finishBoot();
+    return;
+  }
+
+  state.firebase = await loadFirebase();
+  if (!state.firebase) {
+    if (!isLocalFallbackAllowed()) {
+      failClosed("Não foi possível validar seu acesso. Verifique a conexão e tente novamente.");
+      return;
+    }
+    state.user = { uid: "local_user", displayName: "Krio Local", email: "" };
+    state.tenantId = "local";
+    state.membership = { role: "owner", status: "active" };
+    state.data = loadLocalState() || seedData(state.user);
+    setSyncState("offline", "Rodando com dados locais");
+    finishBoot();
+    return;
+  }
+
+  state.firebase.onAuthStateChanged(state.firebase.auth, async (user) => {
+    if (!user) {
+      stopRealtimeSync();
+      window.location.href = "./index.html";
+      return;
+    }
+
+    try {
+      state.user = user;
+      await loadTenantForUser(user);
+      finishBoot();
+    } catch (error) {
+      if (["access-pending", "workspace-missing"].includes(error?.message)) return;
+      if (!isLocalFallbackAllowed()) {
+        failClosed("Não foi possível carregar seu workspace com segurança. Tente novamente em instantes.");
+        return;
+      }
+      state.user = user;
+      state.tenantId = user.uid;
+      state.membership = { role: "owner", status: "active" };
+      state.data = loadLocalState() || seedData(user);
+      setSyncState("offline", "Não foi possível carregar o Firebase. Usando cópia local.");
+      finishBoot();
+    }
+  });
+}
+
+function isLocalFallbackAllowed() {
+  const host = window.location.hostname;
+  return window.location.protocol === "file:"
+    || host === "localhost"
+    || host === "127.0.0.1"
+    || host === "::1"
+    || host === "";
+}
+
+function failClosed(message) {
+  const loading = $("#loadingState");
+  const shell = $("#appShell");
+  if (shell) shell.hidden = true;
+  if (!loading) return;
+
+  loading.hidden = false;
+  const title = $("h1", loading);
+  const text = $("p", loading);
+  const spinner = $(".spinner", loading);
+  if (title) title.textContent = "Acesso não validado";
+  if (text) text.textContent = message;
+  if (spinner) spinner.hidden = true;
+}
+
+function normalizeMembership(membership = {}) {
+  const role = ["owner", "admin", "member"].includes(membership.role) ? membership.role : "member";
+  return {
+    ...membership,
+    role,
+    status: membership.status || "active"
+  };
+}
+
+function currentAccessRole() {
+  if (state.demoMode || state.tenantId === "local") return "owner";
+  return normalizeMembership(state.membership).role;
+}
+
+function canManageWorkspace() {
+  return ["owner", "admin"].includes(currentAccessRole());
+}
+
+function canAccessModule(view) {
+  if (view === "operations") return canManageWorkspace();
+  return ["tracker", "approval"].includes(view);
+}
+
+function canAccessTrackerView(view) {
+  if (["week", "agenda", "trash"].includes(view)) return true;
+  return canManageWorkspace();
+}
+
+function currentPersonId() {
+  if (!state.data?.profiles || !state.user?.uid) return "";
+  if (state.data.profiles[state.user.uid]) return state.user.uid;
+  const profile = Object.values(state.data.profiles).find((item) => item.accessUid === state.user.uid);
+  return profile?.id || state.user.uid;
+}
+
+function canViewPerson(personId) {
+  return canManageWorkspace() || personId === currentPersonId();
+}
+
+function getVisibleProfiles() {
+  return getProfiles().filter((person) => canViewPerson(person.id));
+}
+
+function defaultAssignedDemandTypes() {
+  return demandTypes.map((type) => type.id);
+}
+
+function assignedDemandTypes(person = {}) {
+  const assigned = Array.isArray(person.assignedTypes)
+    ? person.assignedTypes
+    : defaultAssignedDemandTypes();
+  return assigned.filter((id) => demandTypes.some((type) => type.id === id));
+}
+
+function isDemandTypeAssigned(person, typeId) {
+  return assignedDemandTypes(person).includes(typeId);
+}
+
+function getPersonDemandTypes(person) {
+  return demandTypes.filter((type) => isDemandTypeAssigned(person, type.id));
+}
+
+function visibleTrashItems() {
+  const trash = asArray(state.data?.tracker?.trash);
+  if (canManageWorkspace()) return trash;
+  const uid = state.user?.uid || "";
+  return trash.filter((item) => item.deletedBy?.uid === uid || item.deletedByUid === uid);
+}
+
+function flattenTrash(value, ownerUid = "") {
+  if (!value) return [];
+  if (Array.isArray(value)) return value;
+  const values = Object.values(value);
+  const nested = values.some((item) => item && typeof item === "object" && !item.id);
+  if (nested) {
+    return Object.entries(value).flatMap(([uid, items]) => flattenTrash(items, uid));
+  }
+  return values.map((item) => ({
+    ...item,
+    deletedBy: item.deletedBy || (ownerUid ? { uid: ownerUid } : null)
+  }));
+}
+
+async function loadFirebase() {
+  try {
+    const [firebaseApp, firebaseAuth, firebaseDatabase] = await Promise.all([
+      import("https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js"),
+      import("https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js"),
+      import("https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js")
+    ]);
+    const app = firebaseApp.initializeApp(firebaseConfig);
+    return {
+      app,
+      auth: firebaseAuth.getAuth(app),
+      db: firebaseDatabase.getDatabase(app),
+      onAuthStateChanged: firebaseAuth.onAuthStateChanged,
+      signOut: firebaseAuth.signOut,
+      ref: firebaseDatabase.ref,
+      get: firebaseDatabase.get,
+      set: firebaseDatabase.set,
+      update: firebaseDatabase.update,
+      onValue: firebaseDatabase.onValue,
+      off: firebaseDatabase.off
+    };
+  } catch (error) {
+    return null;
+  }
+}
+
+async function loadTenantForUser(user) {
+  const fb = state.firebase;
+  const membershipSnap = await fb.get(fb.ref(fb.db, `memberships/${user.uid}`));
+  const memberships = membershipSnap.val() || {};
+  const activeMembership = Object.entries(memberships).find(([, membership]) => membership?.status === "active");
+  state.tenantId = activeMembership?.[0] || "";
+  state.membership = normalizeMembership(activeMembership?.[1]);
+
+  if (!state.tenantId) {
+    await registerAccessRequestFromApp(user);
+    window.location.href = "./index.html?access=pending";
+    throw new Error("access-pending");
+  }
+
+  const trashPath = canManageWorkspace()
+    ? `tenants/${state.tenantId}/trash`
+    : `tenants/${state.tenantId}/trash/${user.uid}`;
+  const [metaSnap, billingSnap, profilesSnap, weeksSnap, eventsSnap, approvalSnap, trashSnap] = await Promise.all([
+    fb.get(fb.ref(fb.db, `tenants/${state.tenantId}/meta`)),
+    canManageWorkspace() ? fb.get(fb.ref(fb.db, `tenants/${state.tenantId}/billing`)) : Promise.resolve({ val: () => ({}), exists: () => false }),
+    fb.get(fb.ref(fb.db, `tenants/${state.tenantId}/profiles`)),
+    fb.get(fb.ref(fb.db, `tenants/${state.tenantId}/tracker/weeks`)),
+    fb.get(fb.ref(fb.db, `tenants/${state.tenantId}/tracker/events`)),
+    fb.get(fb.ref(fb.db, `tenants/${state.tenantId}/approval`)),
+    fb.get(fb.ref(fb.db, trashPath))
+  ]);
+  if (!metaSnap.exists() && !profilesSnap.exists() && !weeksSnap.exists() && !approvalSnap.exists()) {
+    window.location.href = "./index.html?access=missing";
+    throw new Error("workspace-missing");
+  }
+  const tenant = {
+    meta: metaSnap.val() || {},
+    billing: billingSnap.val() || {},
+    profiles: profilesSnap.val() || {},
+    tracker: {
+      weeks: weeksSnap.val() || [],
+      events: eventsSnap.val() || [],
+      trash: flattenTrash(trashSnap.val(), canManageWorkspace() ? "" : user.uid)
+    },
+    approval: approvalSnap.val() || {}
+  };
+  state.tenantMeta = tenant.meta || {};
+  const localCopy = loadLocalState();
+  state.data = normalizeTenant(localCopy || tenant, user);
+
+  if (!asArray(tenant.tracker?.weeks).length || localCopy) {
+    await persistNow();
+  }
+}
+
+async function registerAccessRequestFromApp(user) {
+  const fb = state.firebase;
+  if (!fb?.db) return;
+  const now = Date.now();
+  const requestRef = fb.ref(fb.db, `accessRequests/${user.uid}`);
+  const requestSnap = await fb.get(requestRef);
+  const current = requestSnap.val() || {};
+  if (current.status && current.status !== "pending") return;
+  const agencyName = current.agencyName || user.email?.split("@")[1]?.split(".")[0] || "Minha Agência";
+  await fb.set(requestRef, {
+    ...current,
+    uid: user.uid,
+    agencyName,
+    userName: user.displayName || user.email?.split("@")[0] || "Usuário",
+    email: user.email || "",
+    status: "pending",
+    source: "app",
+    requestedAt: current.requestedAt || now,
+    updatedAt: now
+  });
+}
+
+function finishBoot() {
+  state.tenantMeta = state.data.meta || {};
+  const localWeek = currentWeek();
+  state.currentWeekIndex = Math.max(0, state.data.tracker.weeks.indexOf(localWeek));
+  render();
+  $("#loadingState").hidden = true;
+  $("#appShell").hidden = false;
+  setupRealtimeSync();
+  startTimerTick();
+}
+
+function setupRealtimeSync() {
+  stopRealtimeSync();
+  if (!state.firebase?.db || !state.firebase.onValue || state.demoMode || state.tenantId === "local" || !state.data) return;
+
+  const fb = state.firebase;
+  const tenantPath = `tenants/${state.tenantId}`;
+  const trashPath = canManageWorkspace()
+    ? `${tenantPath}/trash`
+    : `${tenantPath}/trash/${state.user?.uid || ""}`;
+  const subscriptions = [
+    {
+      path: `${tenantPath}/meta`,
+      apply: (value) => {
+        state.data.meta = {
+          ...(state.data.meta || {}),
+          ...(value || {})
+        };
+        state.tenantMeta = state.data.meta;
+      }
+    },
+    {
+      path: `${tenantPath}/profiles`,
+      apply: (value) => {
+        state.data.profiles = normalizeProfiles(value, state.user);
+        state.data.tracker.weeks = asArray(state.data.tracker.weeks).map((week) => normalizeWeek(week, state.data.profiles));
+      }
+    },
+    {
+      path: `${tenantPath}/tracker/weeks`,
+      apply: (value) => {
+        const weeks = asArray(value);
+        state.data.tracker.weeks = weeks.length
+          ? weeks.map((week) => normalizeWeek(week, state.data.profiles || {}))
+          : [];
+        state.currentWeekIndex = Math.min(state.currentWeekIndex, Math.max(0, state.data.tracker.weeks.length - 1));
+      }
+    },
+    {
+      path: `${tenantPath}/tracker/events`,
+      apply: (value) => {
+        state.data.tracker.events = normalizeAgendaEvents(value);
+      }
+    },
+    {
+      path: `${tenantPath}/approval`,
+      apply: (value) => {
+        state.data.approval = normalizeApprovalState(value);
+        if (state.approvalClientId && !getClient(state.approvalClientId)) state.approvalClientId = null;
+      }
+    },
+    {
+      path: trashPath,
+      apply: (value) => {
+        state.data.tracker.trash = flattenTrash(value, canManageWorkspace() ? "" : state.user?.uid || "");
+      }
+    }
+  ];
+
+  if (canManageWorkspace()) {
+    subscriptions.splice(1, 0, {
+      path: `${tenantPath}/billing`,
+      apply: (value) => {
+        state.data.billing = {
+          ...(state.data.billing || {}),
+          ...(value || {})
+        };
+      }
+    });
+  }
+
+  let initialCallbacks = subscriptions.length;
+  subscriptions.forEach(({ path, apply }) => {
+    let initialized = false;
+    const unsubscribe = fb.onValue(
+      fb.ref(fb.db, path),
+      (snapshot) => {
+        const isInitial = !initialized;
+        initialized = true;
+        if (shouldHoldRealtimeSnapshot()) {
+          if (isInitial && initialCallbacks > 0) initialCallbacks -= 1;
+          return;
+        }
+        apply(snapshot.val());
+        if (isInitial && initialCallbacks > 0) {
+          initialCallbacks -= 1;
+          if (initialCallbacks === 0) scheduleRealtimeRender("Atualizado em tempo real");
+          return;
+        }
+        scheduleRealtimeRender("Atualizado em tempo real");
+      },
+      () => setSyncState("offline", "Tempo real indisponivel")
+    );
+    state.realtimeUnsubs.push(unsubscribe);
+  });
+}
+
+function markLocalWrite() {
+  state.localWritePending = true;
+  state.localWriteBlockUntil = Date.now() + 4500;
+}
+
+function releaseLocalWrite(success = true) {
+  state.localWritePending = false;
+  state.localWriteBlockUntil = Date.now() + (success ? 700 : 6000);
+}
+
+function shouldHoldRealtimeSnapshot() {
+  return state.localWritePending || Date.now() < state.localWriteBlockUntil;
+}
+
+function stopRealtimeSync() {
+  state.realtimeUnsubs.forEach((unsubscribe) => {
+    try {
+      unsubscribe?.();
+    } catch (error) {
+      // Firebase may already have closed the listener.
+    }
+  });
+  state.realtimeUnsubs = [];
+  if (state.realtimeRenderTimer) {
+    cancelAnimationFrame(state.realtimeRenderTimer);
+    state.realtimeRenderTimer = null;
+  }
+}
+
+function scheduleRealtimeRender(message = "Sincronizado") {
+  if (state.realtimeRenderTimer) return;
+  state.realtimeRenderTimer = requestAnimationFrame(() => {
+    state.realtimeRenderTimer = null;
+    saveLocalState();
+    render();
+    setSyncState("online", message);
+  });
+}
+
+function setupShellEvents() {
+  document.querySelectorAll(".app-tab").forEach((button) => {
+    button.addEventListener("click", () => switchModule(button.dataset.view));
+  });
+
+  $("#sidebarToggle")?.addEventListener("click", () => {
+    const shell = $("#appShell");
+    const collapsed = !shell.classList.contains("sidebar-collapsed");
+    shell.classList.toggle("sidebar-collapsed", collapsed);
+    $("#sidebarToggle").setAttribute("aria-expanded", String(!collapsed));
+    localStorage.setItem("krio-sidebar-collapsed", collapsed ? "1" : "0");
+  });
+
+  if (localStorage.getItem("krio-sidebar-collapsed") === "1") {
+    $("#appShell")?.classList.add("sidebar-collapsed");
+    $("#sidebarToggle")?.setAttribute("aria-expanded", "false");
+  }
+
+  $("#logoutBtn")?.addEventListener("click", async () => {
+    if (state.firebase?.auth) {
+      await state.firebase.signOut(state.firebase.auth);
+    } else {
+      window.location.href = "./index.html";
+    }
+  });
+
+  document.addEventListener("click", handleClick);
+  document.addEventListener("submit", handleSubmit);
+  document.addEventListener("dragstart", handleApprovalDragStart);
+  document.addEventListener("dragend", handleApprovalDragEnd);
+  document.addEventListener("dragover", handleApprovalDragOver);
+  document.addEventListener("dragleave", handleApprovalDragLeave);
+  document.addEventListener("drop", handleApprovalDrop);
+  document.addEventListener("pointerdown", handleDialogPointerDown);
+  document.addEventListener("change", handleApprovalFieldChange);
+  document.addEventListener("keydown", handleApprovalKeydown);
+  window.addEventListener("online", () => setSyncState("online", "Online"));
+  window.addEventListener("offline", () => setSyncState("offline", "Sem conexão"));
+}
+
+function ensureDialogHosts() {
+  if (!$("#trackerDialogHost")) {
+    const host = document.createElement("div");
+    host.id = "trackerDialogHost";
+    host.className = "tracker-dialog-host";
+    document.body.appendChild(host);
+  }
+  if (!$("#approvalDialogHost")) {
+    const host = document.createElement("div");
+    host.id = "approvalDialogHost";
+    host.className = "approval-dialog-host";
+    document.body.appendChild(host);
+  }
+}
+
+function handleClick(event) {
+  if (event.target.closest("input, textarea, select, label")) return;
+  const button = event.target.closest("button, [data-action], [data-tracker-view], [data-approval-client], [data-demand-id], [data-creative-id], [data-dialog-backdrop]");
+  if (!button) return;
+
+  if (button.matches("[data-dialog-backdrop]") && button === event.target) {
+    closeDialogs();
+    return;
+  }
+
+  const trackerView = button.dataset.trackerView;
+  if (trackerView) {
+    if (!canAccessTrackerView(trackerView)) return;
+    if (trackerView === "reports" && !featureEnabled("reports")) {
+      openPlanDialog("Relatórios avançados dependem de uma licença ativa.");
+      return;
+    }
+    state.trackerView = trackerView;
+    render();
+    return;
+  }
+
+  if (button.dataset.approvalClient) {
+    state.approvalClientId = button.dataset.approvalClient;
+    state.approvalStatus = "prov";
+    render();
+    return;
+  }
+
+  const action = button.dataset.action;
+  if (!action) return;
+  if (!canRunAction(action, button)) return;
+
+  const actions = {
+    closeDialog: closeDialogs,
+    switchTrackerFilter: () => {
+      state.trackerFilter = button.dataset.filter || "all";
+      renderTracker();
+    },
+    prevWeek: () => moveWeek(-1),
+    nextWeek: () => moveWeek(1),
+    newWeek: createNextWeek,
+    deleteWeek: () => deleteCurrentWeek(),
+    openAddDemand: () => openDemandDialog("", { personId: button.dataset.person || currentPersonId(), type: button.dataset.type }),
+    editDemand: () => openDemandDialog(button.dataset.id),
+    toggleDemand: () => toggleDemand(button.dataset.id),
+    deleteDemand: () => deleteDemand(button.dataset.id),
+    restoreDemand: () => restoreDemand(button.dataset.id),
+    restoreWeek: () => restoreWeek(button.dataset.id),
+    deleteTrashItem: () => deleteTrashItem(button.dataset.id),
+    purgeTrash: purgeTrash,
+    toggleTimer: () => toggleTimer(button.dataset.id),
+    openTimerEdit: () => openTimerEditDialog(button.dataset.id),
+    resetTime: () => resetDemandTime(button.dataset.id),
+    openDemandNote: () => openDemandNoteDialog(button.dataset.id),
+    cycleDifficulty: () => cycleDemandDifficulty(button.dataset.id, button),
+    openPersonDialog: () => openPersonDialog(button.dataset.id),
+    deletePerson: () => deletePerson(button.dataset.id),
+    togglePersonDemandType: () => togglePersonDemandType(button.dataset.person, button.dataset.type, button),
+    setColorValue: () => setColorValue(button),
+    agendaPrev: () => moveAgenda(-1),
+    agendaNext: () => moveAgenda(1),
+    agendaToday: () => {
+      state.agendaCursor = isoDate(new Date());
+      renderTracker();
+    },
+    setAgendaView: () => {
+      state.agendaView = button.dataset.view || "month";
+      if (button.dataset.agendaMonth) {
+        const cursor = parseISODate(state.agendaCursor);
+        state.agendaCursor = isoDate(new Date(cursor.getFullYear(), Number(button.dataset.agendaMonth || 0), 1));
+      }
+      renderTracker();
+    },
+    openAgendaEventDialog: () => openAgendaEventDialog(button.dataset.id || "", button.dataset.date || ""),
+    deleteAgendaEvent: () => deleteAgendaEvent(button.dataset.id),
+    exportTracker: exportTracker,
+    printTracker: printTracker,
+    openReportPreview: openReportPreview,
+    downloadReportHtml: downloadReportHtml,
+    syncNow: () => persistNow(),
+    backApproval: () => {
+      state.approvalClientId = null;
+      render();
+    },
+    openClientDialog: () => openClientDialog(button.dataset.id),
+    deleteClient: () => deleteClient(button.dataset.id),
+    openGroupDialog: () => openGroupDialog(button.dataset.id),
+    deleteGroup: () => deleteGroup(button.dataset.id),
+    openCreativeDialog: () => openCreativeDialog(button.dataset.id || "", { groupId: button.dataset.group }),
+    openCreativeDetail: () => openCreativeDetail(button.dataset.id),
+    deleteCreative: () => deleteCreative(button.dataset.id),
+    setCreativeStatus: () => setCreativeStatus(button.dataset.id, button.dataset.status),
+    sendToClientBoard: () => sendToClientBoard(button.dataset.id),
+    clientApproveCreative: () => clientApproveCreative(button.dataset.id),
+    openClientRejectionDialog: () => openClientRejectionDialog(button.dataset.id),
+    markCreativeCorrected: () => markCreativeCorrected(button.dataset.id),
+    markCreativePosted: () => markCreativePosted(button.dataset.id),
+    triggerImageUpload: () => triggerImageUpload(),
+    setApprovalStatus: () => {
+      state.approvalStatus = button.dataset.status || "prov";
+      renderApproval();
+    },
+    openPlanDialog: () => openPlanDialog(),
+    requestPlan: () => requestPlan(button.dataset.plan),
+    openBillingPortal: () => openBillingPortal(),
+    openLightbox: () => openLightbox(button.dataset.src),
+    closeLightbox: closeLightbox
+  };
+
+  actions[action]?.();
+}
+
+function canRunAction(action, button) {
+  const workspaceActions = new Set([
+    "newWeek",
+    "deleteWeek",
+    "openPersonDialog",
+    "deletePerson",
+    "togglePersonDemandType",
+    "openPlanDialog",
+    "exportTracker",
+    "printTracker",
+    "openClientDialog",
+    "deleteClient",
+    "openGroupDialog",
+    "deleteGroup"
+  ]);
+  if (workspaceActions.has(action)) return canManageWorkspace();
+  if (action === "openAddDemand" && !canManageWorkspace()) {
+    return !button.dataset.person || button.dataset.person === currentPersonId();
+  }
+  return true;
+}
+
+function handleSubmit(event) {
+  const form = event.target;
+  if (!form.matches("form")) return;
+
+  if (form.id === "demandForm") {
+    event.preventDefault();
+    saveDemandForm(form);
+  }
+  if (form.id === "personForm") {
+    event.preventDefault();
+    savePersonForm(form);
+  }
+  if (form.id === "agendaEventForm") {
+    event.preventDefault();
+    saveAgendaEventForm(form);
+  }
+  if (form.id === "clientForm") {
+    event.preventDefault();
+    saveClientForm(form);
+  }
+  if (form.id === "groupForm") {
+    event.preventDefault();
+    saveGroupForm(form);
+  }
+  if (form.id === "creativeForm") {
+    event.preventDefault();
+    saveCreativeForm(form);
+  }
+  if (form.id === "commentForm") {
+    event.preventDefault();
+    saveCommentForm(form);
+  }
+  if (form.id === "completeDemandForm") {
+    event.preventDefault();
+    saveCompleteDemandForm(form);
+  }
+  if (form.id === "timerEditForm") {
+    event.preventDefault();
+    saveTimerEditForm(form);
+  }
+  if (form.id === "demandNoteForm") {
+    event.preventDefault();
+    saveDemandNoteForm(form);
+  }
+  if (form.id === "clientRejectionForm") {
+    event.preventDefault();
+    saveClientRejectionForm(form);
+  }
+}
+
+function handleApprovalDragStart(event) {
+  if (event.target.closest("button, input, textarea, select, label")) return;
+
+  const demandItem = event.target.closest(".tracker-demand-item[draggable='true']");
+  if (demandItem) {
+    state.trackerDrag = {
+      id: demandItem.dataset.id,
+      fromPersonId: demandItem.dataset.person,
+      fromType: demandItem.dataset.type
+    };
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("application/json", JSON.stringify({ type: "trackerDemand", demandId: demandItem.dataset.id }));
+    requestAnimationFrame(() => demandItem.classList.add("dragging"));
+    return;
+  }
+
+  const card = event.target.closest(".approval-creative[draggable='true']");
+  if (card) {
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("application/json", JSON.stringify({
+      type: "creative",
+      creativeId: card.dataset.id,
+      fromGroupId: card.dataset.group
+    }));
+    requestAnimationFrame(() => card.classList.add("dragging"));
+    return;
+  }
+
+  const group = event.target.closest(".approval-kanban-column[draggable='true']");
+  if (!group || event.target.closest(".approval-creative")) return;
+  event.dataTransfer.effectAllowed = "move";
+  event.dataTransfer.setData("application/json", JSON.stringify({
+    type: "group",
+    groupId: group.dataset.approvalGroup
+  }));
+  requestAnimationFrame(() => group.classList.add("dragging"));
+}
+
+function handleApprovalDragOver(event) {
+  if (state.trackerDrag?.id) {
+    const dropzone = event.target.closest("[data-tracker-dropzone]");
+    if (!dropzone) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    dropzone.classList.add("drag-over");
+    document.querySelectorAll(".tracker-demand-item.drag-over").forEach((node) => node.classList.remove("drag-over"));
+    const item = event.target.closest(".tracker-demand-item[draggable='true']");
+    if (item && item.dataset.id !== state.trackerDrag.id) item.classList.add("drag-over");
+    return;
+  }
+
+  const uploadZone = event.target.closest("[data-approval-upload-zone]");
+  if (uploadZone && Array.from(event.dataTransfer?.types || []).includes("Files")) {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    uploadZone.classList.add("drag-over");
+    return;
+  }
+
+  const payload = readApprovalDragPayload(event);
+  if (payload.type === "group") {
+    const board = event.target.closest("[data-approval-group-board]");
+    if (!board) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    event.target.closest(".approval-kanban-column")?.classList.add("group-drag-over");
+    return;
+  }
+
+  const dropzone = event.target.closest("[data-approval-dropzone]");
+  if (!dropzone) return;
+  event.preventDefault();
+  event.dataTransfer.dropEffect = "move";
+  dropzone.classList.add("drag-over");
+}
+
+function handleApprovalDragLeave(event) {
+  const trackerDropzone = event.target.closest("[data-tracker-dropzone]");
+  if (trackerDropzone && !trackerDropzone.contains(event.relatedTarget)) {
+    trackerDropzone.classList.remove("drag-over");
+  }
+
+  const uploadZone = event.target.closest("[data-approval-upload-zone]");
+  if (uploadZone && !uploadZone.contains(event.relatedTarget)) {
+    uploadZone.classList.remove("drag-over");
+    return;
+  }
+
+  const groupColumn = event.target.closest(".approval-kanban-column.group-drag-over");
+  if (groupColumn && !groupColumn.contains(event.relatedTarget)) {
+    groupColumn.classList.remove("group-drag-over");
+  }
+
+  const dropzone = event.target.closest("[data-approval-dropzone]");
+  if (!dropzone || dropzone.contains(event.relatedTarget)) return;
+  dropzone.classList.remove("drag-over");
+}
+
+function handleApprovalDragEnd() {
+  document.querySelectorAll(".tracker-demand-item.dragging, .tracker-demand-item.drag-over, .tracker-dropzone.drag-over").forEach((node) => {
+    node.classList.remove("dragging", "drag-over");
+  });
+  state.trackerDrag = null;
+
+  document.querySelectorAll(".approval-creative.dragging, .approval-kanban-column.dragging, .approval-kanban-column.group-drag-over, .approval-kanban-list.drag-over, .approval-upload-zone.drag-over").forEach((node) => {
+    node.classList.remove("dragging", "drag-over", "group-drag-over");
+  });
+}
+
+function handleApprovalDrop(event) {
+  if (state.trackerDrag?.id) {
+    const dropzone = event.target.closest("[data-tracker-dropzone]");
+    if (!dropzone) {
+      handleApprovalDragEnd();
+      return;
+    }
+    event.preventDefault();
+    const targetItem = event.target.closest(".tracker-demand-item[draggable='true']");
+    const rect = targetItem?.getBoundingClientRect();
+    const insertAfter = rect ? event.clientY > rect.top + (rect.height / 2) : false;
+    moveTrackerDemand(state.trackerDrag.id, dropzone.dataset.person, dropzone.dataset.type, targetItem?.dataset.id || "", insertAfter);
+    handleApprovalDragEnd();
+    return;
+  }
+
+  const uploadZone = event.target.closest("[data-approval-upload-zone]");
+  if (uploadZone && Array.from(event.dataTransfer?.types || []).includes("Files")) {
+    event.preventDefault();
+    handleApprovalUploadDrop(event, uploadZone);
+    handleApprovalDragEnd();
+    return;
+  }
+
+  const payload = readApprovalDragPayload(event);
+  if (payload.type === "group") {
+    const board = event.target.closest("[data-approval-group-board]");
+    if (!board) return;
+    event.preventDefault();
+    const targetGroup = event.target.closest(".approval-kanban-column")?.dataset.approvalGroup || "";
+    moveGroupBefore(payload.groupId, targetGroup);
+    handleApprovalDragEnd();
+    return;
+  }
+
+  const dropzone = event.target.closest("[data-approval-dropzone]");
+  if (!dropzone) return;
+  event.preventDefault();
+  dropzone.classList.remove("drag-over");
+
+  const targetGroupId = dropzone.dataset.approvalDropzone;
+  if (payload.type !== "creative" || !payload.creativeId || !targetGroupId || payload.fromGroupId === targetGroupId) {
+    handleApprovalDragEnd();
+    return;
+  }
+
+  moveCreativeToGroup(payload.creativeId, targetGroupId);
+  handleApprovalDragEnd();
+}
+
+function readApprovalDragPayload(event) {
+  try {
+    return JSON.parse(event.dataTransfer?.getData("application/json") || "{}");
+  } catch (error) {
+    return {};
+  }
+}
+
+function handleApprovalUploadDrop(event, uploadZone) {
+  const input = uploadZone.querySelector('input[type="file"]') || $("#creativeImageFile");
+  const files = Array.from(event.dataTransfer?.files || []).filter((item) => item.type.startsWith("image/"));
+  if (!input || !files.length) return;
+  const transfer = new DataTransfer();
+  Array.from(input.files || []).forEach((file) => transfer.items.add(file));
+  files.forEach((file) => transfer.items.add(file));
+  input.files = transfer.files;
+  updateCreativeUploadPreview(input);
+}
+
+function handleApprovalFieldChange(event) {
+  const colorInput = event.target.closest("[data-color-custom]");
+  if (colorInput) {
+    updateColorPickerValue(colorInput);
+    return;
+  }
+
+  const fileInput = event.target.closest("#creativeImageFile");
+  if (fileInput) {
+    updateCreativeUploadPreview(fileInput);
+    return;
+  }
+
+  const inline = event.target.closest("[data-approval-inline]");
+  if (inline) {
+    updateApprovalInlineField(inline);
+    return;
+  }
+
+  const scheduleField = event.target.closest("[data-schedule-field]");
+  if (scheduleField) {
+    updateScheduleField(scheduleField);
+  }
+}
+
+function handleApprovalKeydown(event) {
+  const inline = event.target.closest("[data-approval-inline]");
+  if (!inline) return;
+  if (event.key === "Enter") {
+    event.preventDefault();
+    inline.blur();
+  }
+  if (event.key === "Escape") {
+    inline.value = inline.dataset.originalValue || "";
+    inline.blur();
+  }
+}
+
+function updateApprovalInlineField(input) {
+  const value = String(input.value || "").trim();
+  const field = input.dataset.approvalInline;
+  if (!value) {
+    input.value = input.dataset.originalValue || "";
+    return;
+  }
+
+  if (field === "groupName") {
+    const client = getClient(state.approvalClientId);
+    const group = client?.groups?.[input.dataset.id];
+    if (!group) return;
+    group.name = value;
+    group.updatedAt = Date.now();
+    input.dataset.originalValue = value;
+    persist();
+    renderApproval();
+    return;
+  }
+
+  if (field === "creativeTitle") {
+    const found = findCreative(input.dataset.id);
+    if (!found?.creative) return;
+    found.creative.title = value;
+    found.creative.updatedAt = Date.now();
+    input.dataset.originalValue = value;
+    persist();
+    renderApproval();
+  }
+}
+
+function updateScheduleField(input) {
+  const found = findCreative(input.dataset.id);
+  if (!found?.creative) return;
+  const field = input.dataset.scheduleField;
+  if (field === "scheduledDate") {
+    found.creative.scheduledDate = String(input.value || "");
+  }
+  if (field === "scheduledTime") {
+    found.creative.scheduledTime = String(input.value || "");
+  }
+  if (field === "scheduleOrder") {
+    found.creative.scheduleOrder = Math.max(0, Number(input.value || 0));
+  }
+  found.creative.updatedAt = Date.now();
+  persist();
+  if (syncPostedCreatives() && state.activeView === "approval") renderApproval();
+}
+
+function updateCreativeUploadPreview(input) {
+  const preview = $("#creativeUploadPreview");
+  if (!preview) return;
+  const files = Array.from(input.files || []).filter((file) => file.type.startsWith("image/"));
+  if (!files.length) return;
+  preview.innerHTML = `
+    <div class="approval-upload-preview-grid">
+      ${files.map((file, index) => `<img src="${attr(URL.createObjectURL(file))}" alt="${attr(file.name || `Imagem ${index + 1}`)}">`).join("")}
+    </div>`;
+}
+
+function triggerImageUpload() {
+  $("#creativeImageFile")?.click();
+}
+
+function handleDialogPointerDown(event) {
+  const head = event.target.closest(".approval-dialog-head");
+  if (!head || event.target.closest("button, input, textarea, select, a")) return;
+
+  const dialog = head.closest(".approval-dialog, .approval-detail");
+  if (!dialog) return;
+
+  const rect = dialog.getBoundingClientRect();
+  const offsetX = event.clientX - rect.left;
+  const offsetY = event.clientY - rect.top;
+
+  dialog.style.position = "fixed";
+  dialog.style.left = `${rect.left}px`;
+  dialog.style.top = `${rect.top}px`;
+  dialog.style.width = `${rect.width}px`;
+  dialog.style.margin = "0";
+  dialog.style.transform = "none";
+  dialog.style.animation = "none";
+  head.setPointerCapture?.(event.pointerId);
+
+  const move = (moveEvent) => {
+    const maxLeft = Math.max(8, window.innerWidth - rect.width - 8);
+    const maxTop = Math.max(8, window.innerHeight - Math.min(rect.height, window.innerHeight - 16) - 8);
+    const left = Math.min(Math.max(8, moveEvent.clientX - offsetX), maxLeft);
+    const top = Math.min(Math.max(8, moveEvent.clientY - offsetY), maxTop);
+    dialog.style.left = `${left}px`;
+    dialog.style.top = `${top}px`;
+  };
+
+  const up = () => {
+    document.removeEventListener("pointermove", move);
+    document.removeEventListener("pointerup", up);
+    head.releasePointerCapture?.(event.pointerId);
+  };
+
+  document.addEventListener("pointermove", move);
+  document.addEventListener("pointerup", up, { once: true });
+}
+
+function switchModule(view) {
+  if (!views[view]) return;
+  if (!canAccessModule(view)) return;
+  if (view === "operations" && !featureEnabled("operations")) {
+    openPlanDialog("O módulo Operação depende de uma licença ativa.");
+    return;
+  }
+  state.activeView = view;
+  render();
+}
+
+function render() {
+  if (!canAccessModule(state.activeView)) state.activeView = "tracker";
+  if (!canAccessTrackerView(state.trackerView)) state.trackerView = "week";
+  renderUser();
+  renderShellState();
+  renderModuleActions();
+  renderTopbarActions();
+  renderTracker();
+  renderOperations();
+  renderApproval();
+  applyRoleVisibility();
+}
+
+function applyRoleVisibility() {
+  $("#appShell")?.setAttribute("data-access-role", currentAccessRole());
+  document.querySelectorAll("[data-tracker-view]").forEach((button) => {
+    button.hidden = !canAccessTrackerView(button.dataset.trackerView);
+  });
+  document.querySelectorAll('[data-action="openPersonDialog"], [data-action="deletePerson"], [data-action="togglePersonDemandType"], [data-action="deleteWeek"], [data-action="openPlanDialog"], [data-action="exportTracker"], [data-action="printTracker"], [data-action="openClientDialog"], [data-action="deleteClient"], [data-action="openGroupDialog"], [data-action="deleteGroup"]').forEach((button) => {
+    button.hidden = !canManageWorkspace();
+  });
+  document.querySelectorAll(".side-section-title").forEach((title) => {
+    if (title.textContent.trim() === "Perfil" && !canManageWorkspace()) title.hidden = true;
+  });
+}
+
+function renderUser() {
+  const name = state.user?.displayName || state.user?.email?.split("@")[0] || "Usuário";
+  const role = `${state.tenantMeta?.name || "Workspace Krio"} · ${accessRoleLabel(currentAccessRole())}`;
+  const avatar = $("#userAvatar");
+  const userName = $("#userName");
+  const userRole = $("#userRole");
+
+  if (avatar) {
+    avatar.hidden = false;
+    avatar.innerHTML = state.user?.photoURL
+      ? `<img src="${attr(state.user.photoURL)}" alt="">`
+      : initials(name);
+  }
+  if (userName) {
+    userName.hidden = false;
+    userName.textContent = name;
+  }
+  if (userRole) {
+    userRole.hidden = false;
+    userRole.textContent = role;
+  }
+}
+
+function renderShellState() {
+  const view = views[state.activeView];
+  $("#pageTitle").textContent = view.title;
+  $("#pageSubtitle").textContent = view.subtitle;
+  document.querySelectorAll(".app-tab").forEach((button) => {
+    button.hidden = !canAccessModule(button.dataset.view);
+    button.classList.toggle("active", button.dataset.view === state.activeView);
+  });
+  document.querySelectorAll("[data-module-view]").forEach((viewNode) => {
+    viewNode.classList.toggle("active", viewNode.dataset.moduleView === state.activeView);
+  });
+}
+
+function renderModuleActions() {
+  const mount = $("#moduleActions");
+  if (!mount) return;
+
+  if (state.activeView === "tracker") {
+    const trashCount = visibleTrashItems().length;
+    const managementLinks = canManageWorkspace()
+      ? `
+        ${sideButton("reports", "Relatórios", icons.report, state.trackerView === "reports")}
+        ${sideButton("history", "Histórico", icons.history, state.trackerView === "history")}
+        ${sideButton("team", "Equipe", icons.team, state.trackerView === "team")}`
+      : "";
+    const profileAction = canManageWorkspace()
+      ? `
+        <div class="side-section-title">Perfil</div>
+        <button class="tracker-profile-chip" type="button" data-action="openPersonDialog" data-id="${attr(currentPersonId())}">
+          <span class="tracker-profile-chip-avatar">${initials(state.user?.displayName || "Krio")}</span>
+          <span class="side-label">${esc(state.user?.displayName || "Meu perfil")}</span>
+          <span class="tracker-profile-chip-settings">${icons.settings}</span>
+        </button>`
+      : "";
+    mount.innerHTML = `
+      <nav class="side-nav tracker-side-group" aria-label="Tracker">
+        <div class="side-section-title">Tracker</div>
+        ${sideButton("week", "Semana", icons.week, state.trackerView === "week")}
+        ${sideButton("agenda", "Agenda", icons.agenda, state.trackerView === "agenda")}
+        ${managementLinks}
+        ${sideButton("trash", `Lixeira${trashCount ? `<span class="tracker-head-badge">${trashCount}</span>` : ""}`, icons.trash, state.trackerView === "trash")}
+        <button class="tracker-head-btn primary" type="button" data-action="openAddDemand">
+          <span class="side-icon">${icons.plus}</span><span class="side-label">Nova demanda</span>
+        </button>
+        ${profileAction}
+      </nav>`;
+    return;
+  }
+
+  if (state.activeView === "operations") {
+    mount.innerHTML = `
+      <nav class="side-nav" aria-label="Operação">
+        <div class="side-section-title">Operação</div>
+        <button class="nav-btn active" type="button">
+          <span class="side-icon">${icons.report}</span><span class="side-label">Resumo ao vivo</span>
+        </button>
+      </nav>`;
+    return;
+  }
+
+  const clients = getClients();
+  mount.innerHTML = `
+    <nav class="side-nav" aria-label="Aprovação">
+      <div class="side-section-title">Clientes</div>
+      ${clients.map((client) => `
+        <button class="nav-btn ${state.approvalClientId === client.id ? "active" : ""}" type="button" data-approval-client="${attr(client.id)}">
+          <span class="side-icon">${clientAvatar(client, "small")}</span>
+          <span class="side-label">${esc(client.name)}</span>
+        </button>`).join("")}
+      <button class="nav-btn" type="button" data-action="openClientDialog">
+        <span class="side-icon">${icons.plus}</span><span class="side-label">Novo cliente</span>
+      </button>
+    </nav>`;
+}
+
+function sideButton(view, label, iconMarkup, active) {
+  return `
+    <button class="tracker-head-btn ${active ? "active" : ""}" type="button" data-tracker-view="${view}">
+      <span class="side-icon">${iconMarkup}</span>
+      <span class="side-label">${label}</span>
+    </button>`;
+}
+
+function colorPickerField(label, name, value = "#3B82F6", fieldClass = "tracker-field") {
+  const current = value || "#3B82F6";
+  const palette = ["#3B82F6", "#34D399", "#A78BFA", "#FBBF24", "#F87171", "#14B8A6", "#F472B6", "#64748B"];
+  return `
+    <div class="${fieldClass}"><span>${esc(label)}</span>
+      <input type="hidden" name="${attr(name)}" value="${attr(current)}" data-color-value="${attr(name)}">
+      <div class="krio-color-picker" data-color-picker="${attr(name)}">
+        ${palette.map((color) => `
+          <button class="krio-color-swatch ${color.toLowerCase() === current.toLowerCase() ? "active" : ""}" type="button" data-action="setColorValue" data-color-input="${attr(name)}" data-color="${attr(color)}" style="--swatch:${attr(color)}" aria-label="Usar cor ${attr(color)}"></button>`).join("")}
+        <label class="krio-color-custom-wrap" style="--swatch:${attr(current)}" title="Cor personalizada">
+          <input type="color" value="${attr(current)}" data-color-custom="${attr(name)}">
+        </label>
+      </div>
+    </div>`;
+}
+
+function setColorValue(button) {
+  const name = button.dataset.colorInput || "";
+  const color = button.dataset.color || "#3B82F6";
+  const form = button.closest("form");
+  const input = form?.querySelector(`[data-color-value="${CSS.escape(name)}"]`);
+  if (!input) return;
+  input.value = color;
+  updateColorPickerUi(form, name, color);
+}
+
+function updateColorPickerValue(input) {
+  const name = input.dataset.colorCustom || "";
+  const form = input.closest("form");
+  const hidden = form?.querySelector(`[data-color-value="${CSS.escape(name)}"]`);
+  if (!hidden) return;
+  hidden.value = input.value || "#3B82F6";
+  updateColorPickerUi(form, name, hidden.value);
+}
+
+function updateColorPickerUi(form, name, color) {
+  const picker = form?.querySelector(`[data-color-picker="${CSS.escape(name)}"]`);
+  if (!picker) return;
+  picker.querySelectorAll(".krio-color-swatch").forEach((swatch) => {
+    swatch.classList.toggle("active", swatch.dataset.color?.toLowerCase() === color.toLowerCase());
+  });
+  const custom = picker.querySelector(".krio-color-custom-wrap");
+  if (custom) custom.style.setProperty("--swatch", color);
+  const native = picker.querySelector("[data-color-custom]");
+  if (native) native.value = color;
+}
+
+function renderTopbarActions() {
+  const mount = $("#topbarActions");
+  if (!mount) return;
+  const license = currentPlan();
+  const planButton = `<button class="shell-btn" type="button" title="Licença e acesso" data-action="openPlanDialog">${esc(license.name)}</button>`;
+
+  if (state.activeView === "tracker") {
+    mount.innerHTML = `${planButton}`;
+    return;
+  }
+
+  if (state.activeView === "approval") {
+    mount.innerHTML = `${planButton}`;
+    return;
+  }
+
+  mount.innerHTML = `${planButton}<button class="topbar-action-btn" type="button" title="Sincronizar" aria-label="Sincronizar" data-action="syncNow">${icons.sync}</button>`;
+}
+
+function renderTracker() {
+  const mount = $("#trackerModuleMount");
+  if (!mount || !state.data) return;
+  if (!canAccessTrackerView(state.trackerView)) state.trackerView = "week";
+
+  if (state.trackerView === "agenda") {
+    mount.innerHTML = renderAgenda();
+    return;
+  }
+  if (state.trackerView === "reports") {
+    mount.innerHTML = renderReports();
+    return;
+  }
+  if (state.trackerView === "history") {
+    mount.innerHTML = renderHistory();
+    return;
+  }
+  if (state.trackerView === "team") {
+    mount.innerHTML = renderTeam();
+    return;
+  }
+  if (state.trackerView === "trash") {
+    mount.innerHTML = renderTrash();
+    return;
+  }
+
+  const week = currentWeek();
+  const stats = getWeekStats(week, getVisibleWeekDemandRefs(week));
+  const filteredTypes = state.trackerFilter === "all"
+    ? demandTypes
+    : demandTypes.filter((type) => type.id === state.trackerFilter);
+
+  mount.innerHTML = `
+    <section class="krio-tracker">
+      <header class="tracker-page-header">
+        <div class="tracker-page-header-left">
+          <div class="tracker-week-label">${esc(week.title)}</div>
+          <h1 class="tracker-page-heading">Semana em <span>movimento</span></h1>
+          <p>${esc(formatDate(week.startDate))} até ${esc(formatDate(week.endDate))}</p>
+        </div>
+        <div class="tracker-page-header-right">
+          <div class="tracker-week-nav" aria-label="Navegação de semanas">
+            <button class="tracker-week-nav-btn" type="button" data-action="prevWeek" ${state.currentWeekIndex <= 0 ? "disabled" : ""}>‹</button>
+            <div class="tracker-week-display">${state.currentWeekIndex + 1} de ${state.data.tracker.weeks.length}</div>
+            <button class="tracker-week-nav-btn" type="button" data-action="nextWeek" ${state.currentWeekIndex >= state.data.tracker.weeks.length - 1 ? "disabled" : ""}>›</button>
+          </div>
+          <div class="tracker-week-actions">
+            <button class="tracker-week-action" type="button" data-action="newWeek">Nova semana</button>
+            <button class="tracker-week-action danger" type="button" data-action="deleteWeek">Excluir semana</button>
+          </div>
+        </div>
+      </header>
+
+      <div class="tracker-stat-strip">
+        ${statCard(stats.total, "Demandas")}
+        ${statCard(stats.done, "Concluídas")}
+        ${statCard(stats.pending, "Pendentes")}
+        ${statCard(`${stats.progress}%`, "Progresso")}
+        ${statCard(formatDuration(stats.minutes), "Tempo")}
+      </div>
+
+      ${stats.overdue ? `<div class="tracker-warning">${stats.overdue} demanda(s) com prazo vencido nesta semana.</div>` : ""}
+
+      <div class="tracker-progress-card tracker-progress-slim">
+        <div class="tracker-progress-meta">
+          <strong>Entrega semanal</strong>
+          <span>${stats.progress}%</span>
+        </div>
+        <div class="tracker-progress-track"><div style="width:${stats.progress}%"></div></div>
+      </div>
+
+      <div class="tracker-tabs" role="tablist" aria-label="Filtro de demandas">
+        <button class="tracker-tab ${state.trackerFilter === "all" ? "active" : ""}" type="button" data-action="switchTrackerFilter" data-filter="all">Todas</button>
+        ${demandTypes.map((type) => `<button class="tracker-tab ${state.trackerFilter === type.id ? "active" : ""}" type="button" data-action="switchTrackerFilter" data-filter="${type.id}">${type.label}</button>`).join("")}
+      </div>
+
+      <div class="tracker-panel">
+        <div class="tracker-team-grid">
+          ${getVisibleProfiles().map((person) => renderPersonColumn(week, person, filteredTypes)).join("")}
+        </div>
+      </div>
+    </section>`;
+}
+
+function renderPersonColumn(week, person, types) {
+  const personWeek = ensureWeekPerson(week, person.id);
+  const stats = getPersonStats(personWeek);
+  const allowedTypes = types.filter((type) => isDemandTypeAssigned(person, type.id) || asArray(personWeek[type.id]).length);
+
+  return `
+    <article class="tracker-person-col">
+      <header class="tracker-person-head">
+        <div class="tracker-person-avatar" style="background:${attr(person.color)}">${initials(person.name)}</div>
+        <div class="tracker-person-info">
+          <div class="tracker-person-name">${esc(person.name)}</div>
+          <div class="tracker-person-role">${esc(person.role || "Equipe")}</div>
+          <div class="tracker-person-progress">
+            <div class="tracker-person-progress-track"><div style="width:${stats.progress}%"></div></div>
+            <div class="tracker-person-progress-text">${stats.done}/${stats.total} concluídas</div>
+          </div>
+        </div>
+      </header>
+      ${allowedTypes.map((type) => renderDemandSection(person.id, type, personWeek[type.id] || [], isDemandTypeAssigned(person, type.id))).join("")}
+    </article>`;
+}
+
+function renderDemandSection(personId, type, demands, canAdd = true) {
+  return `
+    <section class="tracker-demand-section">
+      <div class="tracker-demand-section-title">
+        <span>${esc(type.label)}</span>
+        <span class="tracker-type-badge ${type.id}">${demands.length}</span>
+      </div>
+      <div class="tracker-dropzone" data-tracker-dropzone data-person="${attr(personId)}" data-type="${attr(type.id)}">
+        ${demands.length ? demands.map((demand) => renderDemandItem(demand, personId, type.id)).join("") : `<div class="tracker-empty-section">Sem demandas por aqui.</div>`}
+      </div>
+      ${canAdd ? `<div class="tracker-add-demand-wrap">
+        <button class="tracker-add-demand-btn" type="button" data-action="openAddDemand" data-person="${attr(personId)}" data-type="${attr(type.id)}">${icons.plus} Adicionar demanda</button>
+      </div>` : ""}
+    </section>`;
+}
+
+function renderDemandItem(demand, personId, typeId) {
+  const running = Boolean(demand.runningStartedAt);
+  const time = effectiveMinutes(demand);
+  const hasTime = Boolean(running || time);
+  const timerText = hasTime ? formatClock(effectiveSeconds(demand)) : "";
+  const noteLabel = demand.notes ? demand.notes : "Adicionar observação";
+  return `
+    <article class="tracker-demand-item ${demand.done ? "done" : ""}" draggable="true" data-id="${attr(demand.id)}" data-person="${attr(personId)}" data-type="${attr(typeId)}">
+      <span class="tracker-drag-handle">⋮⋮</span>
+      <button class="tracker-demand-check ${demand.done ? "checked" : ""}" type="button" aria-label="Alternar conclusão" data-action="toggleDemand" data-id="${attr(demand.id)}"></button>
+      <div class="tracker-demand-body">
+        <div class="tracker-demand-text">
+          ${demand.client ? `<div class="tracker-demand-client-name">${esc(demand.client)}</div>` : ""}
+          <div class="tracker-demand-title">${esc(demand.title)}</div>
+        </div>
+        <div class="tracker-demand-meta">
+          ${!demand.done ? `<button class="tracker-timer-btn ${running ? "running" : ""}" type="button" data-action="toggleTimer" data-id="${attr(demand.id)}">${running ? "Pausar" : "Iniciar"}${hasTime ? ` <span class="tracker-timer-separator">·</span><span class="tracker-timer-live" data-live-timer data-id="${attr(demand.id)}" data-format="clock">${esc(timerText)}</span>` : ""}</button>` : ""}
+          ${!demand.done && hasTime ? `<button class="tracker-timer-btn timer-edit" type="button" title="Editar tempo acumulado" aria-label="Editar tempo acumulado" data-action="openTimerEdit" data-id="${attr(demand.id)}">${icons.edit}</button>` : ""}
+          ${!demand.done && hasTime ? `<button class="tracker-timer-btn timer-reset" type="button" title="Zerar timer" aria-label="Zerar timer" data-action="resetTime" data-id="${attr(demand.id)}">${icons.close}</button>` : ""}
+          ${demand.done && time ? `<button class="tracker-demand-time" type="button" title="Editar tempo" data-action="openTimerEdit" data-id="${attr(demand.id)}">${formatDuration(time)}</button>` : ""}
+          ${demand.dueDate ? `<span class="tracker-demand-chip ${isOverdue(demand) ? "warn" : ""}">${esc(formatDate(demand.dueDate))}</span>` : ""}
+          ${demand.done ? `<button class="diff-badge diff-${attr(demand.difficulty || "none")}" type="button" title="Alterar dificuldade" data-action="cycleDifficulty" data-id="${attr(demand.id)}">${difficultyLabel(demand.difficulty || "none")}</button>` : ""}
+          <button class="tracker-demand-obs ${demand.notes ? "" : "empty"}" type="button" title="${attr(noteLabel)}" data-action="openDemandNote" data-id="${attr(demand.id)}">${icons.comment}${demand.notes ? `<span>${esc(demand.notes)}</span>` : ""}</button>
+        </div>
+      </div>
+      <div class="tracker-demand-actions">
+        <button class="tracker-demand-action-btn" type="button" title="Editar" data-action="editDemand" data-id="${attr(demand.id)}">${icons.edit}</button>
+        <button class="tracker-demand-action-btn danger" type="button" title="Excluir" data-action="deleteDemand" data-id="${attr(demand.id)}">${icons.trash}</button>
+      </div>
+    </article>`;
+}
+
+function renderAgenda() {
+  const cursor = parseISODate(state.agendaCursor);
+  const label = state.agendaView === "year"
+    ? String(cursor.getFullYear())
+    : state.agendaView === "month"
+      ? formatMonth(cursor)
+      : weekRangeLabel(startOfWeek(cursor));
+  return `
+    <section class="krio-tracker">
+      ${trackerSectionHead("Agenda", "Compromissos, prazos e entregas planejados.", `<button class="krio-btn primary" type="button" data-action="openAgendaEventDialog">${icons.plus} Compromisso</button>`)}
+      <div class="agenda-controls">
+        <div class="agenda-view-toggle">
+          <button class="agenda-view-btn ${state.agendaView === "month" ? "active" : ""}" type="button" data-action="setAgendaView" data-view="month">Mês</button>
+          <button class="agenda-view-btn ${state.agendaView === "week" ? "active" : ""}" type="button" data-action="setAgendaView" data-view="week">Semana</button>
+          <button class="agenda-view-btn ${state.agendaView === "year" ? "active" : ""}" type="button" data-action="setAgendaView" data-view="year">Ano</button>
+        </div>
+        <div class="agenda-nav">
+          <button class="agenda-nav-btn" type="button" data-action="agendaPrev">‹</button>
+          <div class="agenda-nav-label">${esc(label)}</div>
+          <button class="agenda-nav-btn" type="button" data-action="agendaNext">›</button>
+          <button class="agenda-today-btn" type="button" data-action="agendaToday">Hoje</button>
+        </div>
+      </div>
+      ${state.agendaView === "year" ? renderYearAgenda(cursor) : state.agendaView === "month" ? renderMonthAgenda(cursor) : renderWeekAgenda(cursor)}
+    </section>`;
+}
+
+function renderMonthAgenda(cursor) {
+  const headers = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"];
+  const first = new Date(cursor.getFullYear(), cursor.getMonth(), 1);
+  const gridStart = startOfWeek(first);
+  const today = isoDate(new Date());
+  const events = getAgendaItems();
+
+  let cells = "";
+  for (let i = 0; i < 42; i += 1) {
+    const day = addDays(gridStart, i);
+    const dayIso = isoDate(day);
+    const dayEvents = events.filter((item) => item.date === dayIso);
+    cells += `
+      <div class="agenda-month-cell ${dayIso === today ? "today" : ""} ${day.getMonth() !== cursor.getMonth() ? "other-month" : ""}" data-action="openAgendaEventDialog" data-date="${attr(dayIso)}">
+        <div class="agenda-day-num">${day.getDate()}</div>
+        ${dayEvents.slice(0, 3).map(renderAgendaMonthItem).join("")}
+        ${dayEvents.length > 3 ? `<div class="agenda-more-pill">+${dayEvents.length - 3}</div>` : ""}
+      </div>`;
+  }
+
+  return `
+    <div class="agenda-month-grid">
+      ${headers.map((label) => `<div class="agenda-month-header-cell">${label}</div>`).join("")}
+      ${cells}
+    </div>`;
+}
+
+function renderWeekAgenda(cursor) {
+  const start = startOfWeek(cursor);
+  const today = isoDate(new Date());
+  const events = getAgendaItems();
+
+  return `
+    <div class="agenda-week-grid">
+      ${Array.from({ length: 7 }, (_, index) => {
+        const day = addDays(start, index);
+        const dayIso = isoDate(day);
+        const dayEvents = events.filter((item) => item.date === dayIso);
+        return `
+          <div class="agenda-week-col ${dayIso === today ? "today-col" : ""}">
+            <div class="agenda-week-col-head" data-action="openAgendaEventDialog" data-date="${attr(dayIso)}">
+              <div class="agenda-week-col-day">${formatWeekday(day)}</div>
+              <div class="agenda-week-col-num">${day.getDate()}</div>
+            </div>
+            <div class="agenda-week-col-body">
+              ${dayEvents.length ? dayEvents.map(renderAgendaWeekItem).join("") : `<button class="agenda-week-empty" type="button" data-action="openAgendaEventDialog" data-date="${attr(dayIso)}">Livre</button>`}
+            </div>
+          </div>`;
+      }).join("")}
+    </div>`;
+}
+
+function renderYearAgenda(cursor) {
+  const year = cursor.getFullYear();
+  const events = getAgendaItems();
+  return `
+    <div class="agenda-year-grid">
+      ${Array.from({ length: 12 }, (_, month) => {
+        const monthEvents = events.filter((item) => {
+          const date = parseISODate(item.date);
+          return date.getFullYear() === year && date.getMonth() === month;
+        });
+        const monthDate = new Date(year, month, 1);
+        return `
+          <button class="agenda-year-card" type="button" data-action="setAgendaView" data-view="month" data-agenda-month="${month}">
+            <strong>${esc(formatMonth(monthDate).replace(` de ${year}`, ""))}</strong>
+            <span>${monthEvents.length} item(ns)</span>
+            <small>${monthEvents.slice(0, 2).map((item) => esc(item.title)).join(" · ") || "Sem compromissos"}</small>
+          </button>`;
+      }).join("")}
+    </div>`;
+}
+
+function renderAgendaMonthItem(item) {
+  const action = item.kind === "demand" ? "editDemand" : "openAgendaEventDialog";
+  return `
+    <button class="agenda-month-event-pill ${attr(item.type || "meeting")}" type="button" data-action="${action}" data-id="${attr(item.id)}" title="${attr(item.title)}">
+      ${item.time ? `${esc(item.time)} ` : ""}${esc(item.title)}
+    </button>`;
+}
+
+function renderAgendaWeekItem(item) {
+  const action = item.kind === "demand" ? "editDemand" : "openAgendaEventDialog";
+  return `
+    <button class="agenda-week-event ${attr(item.type || "meeting")}" type="button" data-action="${action}" data-id="${attr(item.id)}">
+      <div class="agenda-week-event-time">${esc(item.time || item.client || item.label || "Compromisso")}</div>
+      <div class="agenda-week-event-title">${esc(item.title)}</div>
+    </button>`;
+}
+
+function getAgendaItems() {
+  const demandItems = getVisibleDemandRefs()
+    .filter(({ demand }) => demand.dueDate)
+    .map(({ demand, person }) => ({
+      kind: "demand",
+      id: demand.id,
+      title: demand.title,
+      date: demand.dueDate,
+      time: "",
+      type: demand.type || "mensal",
+      client: demand.client || "",
+      label: person.name
+    }));
+  const eventItems = normalizeAgendaEvents(state.data?.tracker?.events || []).map((event) => ({
+    ...event,
+    kind: "event"
+  }));
+  return [...demandItems, ...eventItems].sort((a, b) => `${a.date}T${a.time || "00:00"}`.localeCompare(`${b.date}T${b.time || "00:00"}`));
+}
+
+function renderReports() {
+  const all = getAllDemandRefs();
+  const week = currentWeek();
+  const weekRefs = getWeekDemandRefs(week);
+  const done = all.filter(({ demand }) => demand.done).length;
+  const minutes = all.reduce((sum, { demand }) => sum + effectiveMinutes(demand), 0);
+  const byType = demandTypes.map((type) => ({
+    ...type,
+    total: all.filter(({ demand }) => demand.type === type.id).length
+  }));
+
+  return `
+    <section class="krio-tracker">
+      ${trackerSectionHead("Relatórios", "Visualização em HTML, impressão paisagem e exportação adaptadas para o KRIO.", `
+        <div class="tracker-toolbar">
+          <button class="krio-btn" type="button" data-action="openReportPreview">${icons.report} Ver HTML</button>
+          <button class="krio-btn" type="button" data-action="downloadReportHtml">${icons.sync} Baixar HTML</button>
+          <button class="krio-btn primary" type="button" data-action="printTracker">${icons.print} Imprimir</button>
+        </div>`)}
+      <div class="tracker-report-preview-card">
+        <div>
+          <span>Relatório da semana</span>
+          <strong>${esc(week.title)}</strong>
+          <p>${weekRefs.length} demanda(s), ${getProfiles().length} pessoa(s), ${formatDuration(weekRefs.reduce((sum, { demand }) => sum + effectiveMinutes(demand), 0))} registrados.</p>
+        </div>
+        <button class="krio-btn primary" type="button" data-action="openReportPreview">Abrir prévia</button>
+      </div>
+      <div class="tracker-report-grid">
+        ${statReport("Total de demandas", all.length, "Toda a base ativa")}
+        ${statReport("Concluídas", done, `${percent(done, all.length)}% de conclusão`)}
+        ${statReport("Tempo registrado", formatDuration(minutes), "Timer acumulado")}
+        ${statReport("Em atraso", all.filter(({ demand }) => isOverdue(demand)).length, "Itens pendentes vencidos")}
+      </div>
+      <div class="tracker-section-head">
+        <div><h3>Distribuição por tipo</h3><p>Ajuda a enxergar onde a equipe está concentrando energia.</p></div>
+      </div>
+      <div class="tracker-list">
+        ${byType.map((type) => `
+          <div class="tracker-report-card">
+            <div><strong>${esc(type.label)}</strong><span>${type.total} demanda(s)</span></div>
+            <span class="tracker-type-badge ${type.id}">${percent(type.total, all.length)}%</span>
+          </div>`).join("")}
+      </div>
+    </section>`;
+}
+
+function statReport(title, value, label) {
+  return `<div class="tracker-report-card"><div><strong>${esc(title)}</strong><span>${esc(label)}</span></div><div class="tracker-history-stat">${esc(value)}</div></div>`;
+}
+
+function renderHistory() {
+  const weeks = state.data.tracker.weeks;
+  return `
+    <section class="krio-tracker">
+      ${trackerSectionHead("Histórico", "Semanas registradas e entregas finalizadas.")}
+      <div>
+        ${weeks.map((week, index) => {
+          const stats = getWeekStats(week);
+          return `
+            <article class="history-week">
+              <button class="history-week-header" type="button" data-action="noop">
+                <span class="history-week-title">${esc(week.title)}</span>
+                <span class="history-week-stats">
+                  <span class="hw-stat"><span class="dot dot-done"></span>${stats.done}</span>
+                  <span class="hw-stat"><span class="dot dot-pend"></span>${stats.pending}</span>
+                  <span class="hw-stat">${stats.progress}%</span>
+                </span>
+              </button>
+              <div class="history-week-body open">
+                ${getWeekDemandRefs(week).length ? getWeekDemandRefs(week).map(({ demand, person }) => `
+                  <div class="history-item">
+                    <span class="history-done-dot" style="background:${demand.done ? "var(--green)" : "var(--muted-2)"}"></span>
+                    <span class="history-person-tag">${esc(person.name)}</span>
+                    <span>${esc(demand.title)}</span>
+                  </div>`).join("") : `<div class="tracker-empty">Semana sem demandas.</div>`}
+              </div>
+            </article>`;
+        }).join("")}
+      </div>
+    </section>`;
+}
+
+function renderTeam() {
+  if (!canManageWorkspace()) return `<section class="krio-tracker"><div class="tracker-empty">Acesso restrito ao administrador.</div></section>`;
+  return `
+    <section class="krio-tracker">
+      ${trackerSectionHead("Equipe", "Perfis, acesso e tarefas atribuídas para cada colaborador.", `<button class="krio-btn primary" type="button" data-action="openPersonDialog">${icons.plus} Pessoa</button>`)}
+      <div class="tracker-list team-assignment-list">
+        ${getProfiles().map((person) => `
+          <div class="tracker-profile-item team-assignment-card">
+            <div class="tracker-profile-left">
+              <span class="tracker-profile-dot" style="background:${attr(person.color)}"></span>
+              <div><strong>${esc(person.name)}</strong><span>${esc(person.role || "Equipe")} · ${esc(accessRoleLabel(person.accessRole || "member"))}</span></div>
+            </div>
+            <div class="team-assignment-types">
+              <span class="team-assignment-label">Tarefas atribuídas</span>
+              <div class="team-assignment-toggle-row">
+                ${renderAssignedTypeToggles(person)}
+              </div>
+            </div>
+            <div class="tracker-toolbar">
+              <button class="krio-btn small" type="button" data-action="openPersonDialog" data-id="${attr(person.id)}">Editar</button>
+              <button class="krio-btn small danger" type="button" data-action="deletePerson" data-id="${attr(person.id)}">Remover</button>
+            </div>
+          </div>`).join("")}
+      </div>
+    </section>`;
+}
+
+function renderAssignedTypeToggles(person) {
+  return demandTypes.map((type) => {
+    const enabled = isDemandTypeAssigned(person, type.id);
+    return `
+      <button class="team-type-toggle ${enabled ? "active" : ""} ${attr(type.id)}" type="button" data-action="togglePersonDemandType" data-person="${attr(person.id)}" data-type="${attr(type.id)}" aria-pressed="${enabled ? "true" : "false"}">
+        <span class="team-type-toggle-label">${esc(type.label)}</span>
+        <span class="team-type-switch" aria-hidden="true"><span></span></span>
+        <span class="team-type-state" data-toggle-state>${enabled ? "On" : "Off"}</span>
+      </button>`;
+  }).join("");
+}
+
+function renderTrash() {
+  expireTrashQuarantine();
+  const trash = visibleTrashItems();
+  return `
+    <section class="krio-tracker">
+      ${trackerSectionHead("Lixeira", "Demandas e semanas removidas ficam em quarentena antes da limpeza definitiva.", trash.length ? `<button class="krio-btn danger" type="button" data-action="purgeTrash">Limpar</button>` : "")}
+      <div class="tracker-list">
+        ${trash.length ? trash.map((item) => `
+          <div class="tracker-trash-item">
+            <div>
+              <strong>${esc(item.title)}</strong>
+              <span>${item.kind === "week" ? "Semana" : "Demanda"} removida em ${esc(formatDateTime(item.deletedAt))}${item.quarantineUntil ? ` · quarentena até ${esc(formatDateTime(item.quarantineUntil))}` : ""}</span>
+            </div>
+            <div class="tracker-toolbar">
+              <button class="krio-btn small" type="button" data-action="${item.kind === "week" ? "restoreWeek" : "restoreDemand"}" data-id="${attr(item.id)}">Restaurar</button>
+              <button class="krio-btn small danger" type="button" data-action="deleteTrashItem" data-id="${attr(item.id)}">Excluir</button>
+            </div>
+          </div>`).join("") : `<div class="tracker-empty">Nada na lixeira.</div>`}
+      </div>
+    </section>`;
+}
+
+function renderOperations() {
+  const mount = $("#operationsModuleMount");
+  if (!mount || !state.data) return;
+  if (!canAccessModule("operations")) {
+    mount.innerHTML = "";
+    return;
+  }
+
+  const week = currentWeek();
+  const stats = getWeekStats(week);
+  const all = getWeekDemandRefs(week);
+  const live = all.filter(({ demand }) => demand.runningStartedAt);
+  const people = getProfiles().map((person) => {
+    const personDemands = all.filter((ref) => ref.person.id === person.id);
+    const done = personDemands.filter((ref) => ref.demand.done).length;
+    return {
+      ...person,
+      total: personDemands.length,
+      done,
+      progress: percent(done, personDemands.length),
+      minutes: personDemands.reduce((sum, ref) => sum + effectiveMinutes(ref.demand), 0)
+    };
+  });
+  const typeMax = Math.max(1, ...demandTypes.map((type) => all.filter(({ demand }) => demand.type === type.id).length));
+
+  mount.innerHTML = `
+    <section class="krio-operations">
+      <header class="ops-hero">
+        <div>
+          <div class="ops-eyebrow">Operação ao vivo</div>
+          <h2>${esc(week.title)}</h2>
+          <p>${stats.total ? "Acompanhamento de entregas, timers e gargalos da semana." : "Sem demandas nesta semana ainda."}</p>
+        </div>
+        <div class="ops-hero-status">
+          <span class="ops-pill live">${live.length ? `${live.length} timer(s) ativo(s)` : "Sincronizado"}</span>
+          <span class="ops-updated">Atualizado agora</span>
+        </div>
+      </header>
+
+      <div class="ops-kpis">
+        ${opsKpi(stats.total, "Demandas", `${stats.pending} pendentes`)}
+        ${opsKpi(`${stats.progress}%`, "Progresso", `${stats.done} concluídas`, "green")}
+        ${opsKpi(formatDuration(stats.minutes), "Tempo", "Registrado")}
+        ${opsKpi(stats.overdue, "Atrasos", "Prazos vencidos", stats.overdue ? "orange" : "")}
+        ${opsKpi(live.length, "Timers", "Ativos agora", live.length ? "orange" : "green")}
+      </div>
+
+      <div class="ops-progress-card">
+        <div class="ops-progress-meta"><span>Saúde da semana</span><strong>${stats.progress}%</strong></div>
+        <div class="ops-progress-track"><div style="width:${stats.progress}%"></div></div>
+      </div>
+
+      ${live.length ? `
+        <section class="ops-live">
+          <div class="ops-section-head"><div><h3>Em execução</h3><p>Timers abertos neste momento.</p></div><span class="ops-pill live">Live</span></div>
+          <div class="ops-live-grid">
+            ${live.map(({ demand, person }) => `
+              <article class="ops-live-card">
+                <div class="ops-live-person"><span class="ops-avatar" style="width:28px;height:28px;background:${attr(person.color)}">${initials(person.name)}</span>${esc(person.name)}</div>
+                <p>${esc(demand.title)}</p>
+                <div class="ops-live-foot">
+                  <span class="ops-client">${esc(demand.client || "Sem cliente")}</span>
+                  <span class="ops-live-time" data-live-timer data-id="${attr(demand.id)}" data-format="clock">${esc(formatClock(effectiveSeconds(demand)))}</span>
+                </div>
+              </article>`).join("")}
+          </div>
+        </section>` : ""}
+
+      <div class="ops-grid three">
+        <section class="ops-card">
+          <div class="ops-section-head"><div><h3>Equipe</h3><p>Volume e progresso por pessoa.</p></div></div>
+          <div class="ops-list">
+            ${people.map((person) => `
+              <article class="ops-person-row">
+                <span class="ops-avatar" style="width:34px;height:34px;background:${attr(person.color)}">${initials(person.name)}</span>
+                <div class="ops-person-main">
+                  <div class="ops-row-title"><strong>${esc(person.name)}</strong><span>${person.done}/${person.total}</span></div>
+                  <div class="ops-mini-track"><div style="width:${person.progress}%"></div></div>
+                </div>
+                <span class="ops-percent">${person.progress}%</span>
+              </article>`).join("")}
+          </div>
+        </section>
+
+        <section class="ops-card">
+          <div class="ops-section-head"><div><h3>Distribuição</h3><p>Demandas por tipo.</p></div></div>
+          <div class="ops-bars">
+            ${demandTypes.map((type) => {
+              const total = all.filter(({ demand }) => demand.type === type.id).length;
+              return `
+                <div class="ops-bar-row">
+                  <span>${esc(type.label)}</span>
+                  <div class="ops-bar-track"><div style="width:${percent(total, typeMax)}%"></div></div>
+                  <strong>${total}</strong>
+                </div>`;
+            }).join("")}
+          </div>
+        </section>
+
+        <section class="ops-card">
+          <div class="ops-section-head"><div><h3>Nível de dificuldade</h3><p>Leitura rápida dos pontos que podem travar a semana.</p></div></div>
+          <div class="ops-difficulty-list">
+            ${["none", "some", "hard"].map((level) => {
+              const total = all.filter(({ demand }) => (demand.difficulty || "none") === level).length;
+              return `
+                <article class="ops-difficulty-row ${attr(level)}">
+                  <span>${esc(difficultyLabel(level))}</span>
+                  <strong>${total}</strong>
+                </article>`;
+            }).join("")}
+          </div>
+        </section>
+      </div>
+
+      <div class="ops-grid two">
+        <section class="ops-card">
+          <div class="ops-section-head"><div><h3>Próximas entregas</h3><p>Itens pendentes ordenados por prazo.</p></div></div>
+          <div class="ops-list">
+            ${all.filter(({ demand }) => !demand.done).sort((a, b) => String(a.demand.dueDate || "9999").localeCompare(String(b.demand.dueDate || "9999"))).slice(0, 6).map(({ demand, person }) => `
+              <article class="ops-demand-row">
+                <span class="ops-dot ${demand.runningStartedAt ? "running" : ""}"></span>
+                <div><p>${esc(demand.title)}</p><div class="ops-demand-meta"><span>${esc(person.name)}</span>${demand.dueDate ? `<span>${esc(formatDate(demand.dueDate))}</span>` : ""}</div></div>
+              </article>`).join("") || `<div class="ops-empty">Sem pendências.</div>`}
+          </div>
+        </section>
+
+        <section class="ops-card">
+          <div class="ops-section-head"><div><h3>Atividade recente</h3><p>Últimas demandas concluídas.</p></div></div>
+          <div class="ops-list">
+            ${all.filter(({ demand }) => demand.done).sort((a, b) => (b.demand.completedAt || 0) - (a.demand.completedAt || 0)).slice(0, 6).map(({ demand, person }) => `
+              <article class="ops-activity-row">
+                <span class="ops-activity-icon done">${icons.check}</span>
+                <div><p><span>${esc(person.name)}</span> concluiu ${esc(demand.title)}</p><span>${esc(formatDateTime(demand.completedAt))}</span></div>
+              </article>`).join("") || `<div class="ops-empty">Ainda não há entregas concluídas.</div>`}
+          </div>
+        </section>
+      </div>
+    </section>`;
+}
+
+function opsKpi(value, label, detail, extraClass = "") {
+  return `<div class="ops-kpi ${extraClass}"><span>${esc(label)}</span><strong>${esc(value)}</strong><small>${esc(detail)}</small></div>`;
+}
+
+function renderApproval() {
+  const mount = $("#approvalModuleMount");
+  if (!mount || !state.data) return;
+
+  syncPostedCreatives();
+
+  const clients = getClients();
+  const selected = state.approvalClientId ? getClient(state.approvalClientId) : null;
+
+  if (!selected) {
+    const totalCreatives = clients.reduce((sum, client) => sum + getCreatives(client).length, 0);
+    mount.innerHTML = `
+      <section class="krio-approval">
+        <header class="approval-hero">
+          <div>
+            <div class="approval-eyebrow">Aprovação criativa</div>
+            <h2>Clientes e peças</h2>
+            <p>${clients.length} cliente(s), ${totalCreatives} peça(s) em acompanhamento.</p>
+          </div>
+          <button class="krio-btn primary" type="button" data-action="openClientDialog">${icons.plus} Novo cliente</button>
+        </header>
+        <div class="approval-client-grid">
+          ${clients.map(renderClientCard).join("")}
+          <button class="approval-add-card" type="button" data-action="openClientDialog"><strong>+</strong><span>Novo cliente</span></button>
+        </div>
+      </section>`;
+    return;
+  }
+
+  const activeStatus = approvalStatuses[state.approvalStatus] ? state.approvalStatus : "prov";
+  state.approvalStatus = activeStatus;
+  const groups = getApprovalGroups(selected);
+  const creatives = getCreatives(selected);
+  const visibleCreatives = creatives.filter((creative) => normalizeApprovalStatus(creative.status) === activeStatus);
+  const counts = countCreativesByStatus(creatives);
+  const sectionCopy = approvalSectionCopy(activeStatus);
+
+  mount.innerHTML = `
+    <section class="krio-approval">
+      <header class="approval-panel-head">
+        <button class="krio-icon-btn" type="button" title="Voltar" aria-label="Voltar" data-action="backApproval">${icons.back}</button>
+        ${clientAvatar(selected)}
+        <div class="approval-panel-title">
+          <h2>${esc(selected.name)}</h2>
+          <p>${groups.length} grupo(s), ${creatives.length} peça(s) cadastrada(s)</p>
+        </div>
+        <div class="approval-panel-actions">
+          <button class="krio-btn" type="button" data-action="openClientDialog" data-id="${attr(selected.id)}">Editar cliente</button>
+          <button class="krio-btn" type="button" data-action="openGroupDialog">${icons.plus} Novo grupo</button>
+        </div>
+      </header>
+
+      <div class="approval-tabs">
+        ${approvalStatusTabs.map((tab) => approvalTab(tab.id, tab.label, counts[tab.id] || 0)).join("")}
+      </div>
+
+      <section class="approval-panel">
+        <div class="approval-section-head">
+          <div>
+            <h3>${esc(sectionCopy.title)}</h3>
+            <p>${esc(sectionCopy.text)}</p>
+          </div>
+          ${activeStatus === "prov" ? `<button class="krio-btn" type="button" data-action="openGroupDialog">${icons.plus} Novo grupo</button>` : ""}
+        </div>
+        ${renderApprovalStatusView(activeStatus, selected, groups, visibleCreatives)}
+      </section>
+    </section>`;
+}
+
+function renderClientCard(client) {
+  const creatives = getCreatives(client);
+  const counts = countCreativesByStatus(creatives);
+  return `
+    <article class="approval-client-card" role="button" tabindex="0" data-approval-client="${attr(client.id)}">
+      ${clientAvatar(client)}
+      <div class="approval-client-main">
+        <strong>${esc(client.name)}</strong>
+        <span>${esc(client.email || `${getApprovalGroups(client).length} grupo(s)`)}</span>
+      </div>
+      <div class="approval-client-actions">
+        <button class="krio-icon-btn" type="button" title="Editar cliente" aria-label="Editar cliente" data-action="openClientDialog" data-id="${attr(client.id)}">${icons.edit}</button>
+        <button class="krio-icon-btn danger" type="button" title="Excluir cliente" aria-label="Excluir cliente" data-action="deleteClient" data-id="${attr(client.id)}">${icons.trash}</button>
+      </div>
+      <div class="approval-status-row">
+        <span class="approval-status prov">${counts.prov}</span>
+        <span class="approval-status internalApproved">${counts.internalApproved}</span>
+        <span class="approval-status internalRejected">${counts.internalRejected}</span>
+        <span class="approval-status clientReview">${counts.clientReview}</span>
+        <span class="approval-status scheduled">${counts.scheduled}</span>
+        <span class="approval-status posted">${counts.posted}</span>
+      </div>
+    </article>`;
+}
+
+function approvalTab(status, label, count) {
+  return `<button class="approval-tab ${state.approvalStatus === status ? "active" : ""}" type="button" data-action="setApprovalStatus" data-status="${status}">${esc(label)} <span>${count}</span></button>`;
+}
+
+function clientAvatar(client, extraClass = "") {
+  const logo = client?.logoUrl || "";
+  return `
+    <span class="approval-client-avatar ${extraClass}" style="background:${attr(client?.color || "#3B82F6")}">
+      ${logo ? `<img src="${attr(logo)}" alt="Logo ${attr(client?.name || "cliente")}">` : initials(client?.name || "K")}
+    </span>`;
+}
+
+function approvalSectionCopy(status) {
+  return {
+    prov: {
+      title: "Grupos",
+      text: "Edite nomes direto no quadro. Arraste grupos ou cards para reorganizar."
+    },
+    internalApproved: {
+      title: "Aprovadas internamente",
+      text: "Peças prontas para enviar ao quadro do cliente."
+    },
+    internalRejected: {
+      title: "Reprovadas internamente",
+      text: "Peças que precisam de correção antes de voltar ao provisório."
+    },
+    clientReview: {
+      title: "Quadro do cliente",
+      text: "Área de revisão com aprovação ou pedido obrigatório de ajuste."
+    },
+    scheduled: {
+      title: "Agendamento",
+      text: "Defina data e ordem de publicação. Após a data, a peça entra em Postados."
+    },
+    posted: {
+      title: "Postados",
+      text: "Histórico de criativos já publicados."
+    }
+  }[status] || { title: "Aprovação", text: "Acompanhe o fluxo das peças." };
+}
+
+function renderApprovalStatusView(status, client, groups, creatives) {
+  if (status === "prov") return renderApprovalKanban(client, groups);
+  if (status === "clientReview") return renderClientApprovalBoard(creatives, client);
+  if (status === "scheduled") return renderScheduleBoard(creatives, client);
+  return renderApprovalFlatGrid(creatives, status, client);
+}
+
+function renderApprovalKanban(client, groups) {
+  if (!groups.length) {
+    return `
+      <div class="approval-empty">
+        Crie o primeiro grupo para começar o quadro de aprovação.
+        <div style="margin-top:12px"><button class="krio-btn primary" type="button" data-action="openGroupDialog">${icons.plus} Novo grupo</button></div>
+      </div>`;
+  }
+
+  return `<div class="approval-kanban" data-approval-group-board>${groups.map((group) => renderApprovalGroupColumn(group, client.id)).join("")}</div>`;
+}
+
+function renderApprovalGroupColumn(group, clientId) {
+  const cards = getGroupCards(group).filter((creative) => normalizeApprovalStatus(creative.status) === "prov");
+  return `
+    <article class="approval-kanban-column" draggable="true" data-approval-group="${attr(group.id)}">
+      <div class="approval-kanban-head">
+        <div>
+          <input class="approval-inline-title" data-approval-inline="groupName" data-id="${attr(group.id)}" data-original-value="${attr(group.name || "Grupo")}" value="${attr(group.name || "Grupo")}" aria-label="Nome do grupo">
+          <span>${cards.length} card(s)</span>
+        </div>
+        <div class="approval-inline-actions">
+          <button class="krio-icon-btn" type="button" title="Editar grupo" aria-label="Editar grupo" data-action="openGroupDialog" data-id="${attr(group.id)}">${icons.edit}</button>
+          <button class="krio-icon-btn danger" type="button" title="Excluir grupo" aria-label="Excluir grupo" data-action="deleteGroup" data-id="${attr(group.id)}">${icons.trash}</button>
+        </div>
+      </div>
+      <div class="approval-kanban-list" data-approval-dropzone="${attr(group.id)}">
+        ${cards.map((creative) => renderCreativeCard(creative, group.id)).join("")}
+        <button class="approval-add-card-row" type="button" data-action="openCreativeDialog" data-group="${attr(group.id)}">${icons.plus} Adicionar um card</button>
+      </div>
+    </article>`;
+}
+
+function renderApprovalFlatGrid(creatives, status, client = getClient(state.approvalClientId)) {
+  return renderGroupedCreativeBoard(
+    creatives,
+    client,
+    (creative) => renderCreativeCard(creative, creative.groupId, true),
+    `<div class="approval-empty">Nenhuma peça em ${esc(approvalStatuses[status].toLowerCase())}.</div>`
+  );
+}
+
+function renderClientApprovalBoard(creatives, client) {
+  return renderGroupedCreativeBoard(
+    creatives,
+    client,
+    (creative) => renderCreativeCard(creative, creative.groupId, true, `
+        <button class="krio-btn primary" type="button" data-action="clientApproveCreative" data-id="${attr(creative.id)}">${icons.check} Aprovar</button>
+        <button class="krio-btn danger" type="button" data-action="openClientRejectionDialog" data-id="${attr(creative.id)}">Reprovar</button>
+      `),
+    `<div class="approval-empty">Nenhuma peça enviada para ${esc(client.name)} ainda.</div>`,
+    "client-board"
+  );
+}
+
+function renderGroupedCreativeBoard(creatives, client, cardRenderer, emptyMarkup, extraClass = "") {
+  if (!creatives.length) return emptyMarkup;
+  const groups = getApprovalGroups(client);
+  const grouped = groups
+    .map((group) => ({
+      group,
+      cards: creatives.filter((creative) => creative.groupId === group.id)
+    }))
+    .filter((item) => item.cards.length);
+
+  return `
+    <div class="approval-grouped-board ${extraClass}">
+      ${grouped.map(({ group, cards }) => `
+        <section class="approval-flow-group-card" data-approval-flow-group="${attr(group.id)}">
+          <header class="approval-flow-group-head">
+            <div>
+              <strong>${esc(group.name || "Grupo")}</strong>
+              <span>${cards.length} peça(s)</span>
+            </div>
+            <span class="approval-flow-group-chip">Grupo</span>
+          </header>
+          <div class="approval-card-grid flat">
+            ${cards.map(cardRenderer).join("")}
+          </div>
+        </section>`).join("")}
+    </div>`;
+}
+
+function renderScheduleBoard(creatives, client = getClient(state.approvalClientId)) {
+  const sorted = [...creatives].sort((a, b) => {
+    const date = scheduleSortKey(a).localeCompare(scheduleSortKey(b));
+    if (date !== 0) return date;
+    return Number(a.scheduleOrder || 0) - Number(b.scheduleOrder || 0);
+  });
+  if (!sorted.length) return `<div class="approval-empty">Nenhuma peça aprovada pelo cliente para agendar.</div>`;
+
+  const grouped = getApprovalGroups(client)
+    .map((group) => ({
+      group,
+      cards: sorted.filter((creative) => creative.groupId === group.id)
+    }))
+    .filter((item) => item.cards.length);
+
+  return `
+    <div class="approval-grouped-board schedule-grouped-board">
+      ${grouped.map(({ group, cards }) => `
+        <section class="approval-flow-group-card schedule-flow-group-card" data-approval-flow-group="${attr(group.id)}">
+          <header class="approval-flow-group-head">
+            <div>
+              <strong>${esc(group.name || "Grupo")}</strong>
+              <span>${cards.length} peça(s) em agendamento</span>
+            </div>
+            <span class="approval-flow-group-chip">Grupo</span>
+          </header>
+          <div class="approval-card-grid flat schedule-board">
+            ${cards.map((creative) => renderCreativeCard(creative, creative.groupId, true, renderScheduleControls(creative))).join("")}
+          </div>
+        </section>`).join("")}
+    </div>`;
+}
+
+function renderScheduleControls(creative) {
+  return `
+    <label class="approval-schedule-field date">Data
+      <input class="krio-input" type="date" data-schedule-field="scheduledDate" data-id="${attr(creative.id)}" value="${attr(creative.scheduledDate || "")}">
+    </label>
+    <label class="approval-schedule-field time">Horário
+      <input class="krio-input" type="time" data-schedule-field="scheduledTime" data-id="${attr(creative.id)}" value="${attr(creative.scheduledTime || "")}">
+    </label>
+    <label class="approval-schedule-field order">Ordem
+      <input class="krio-input" type="number" min="0" step="1" data-schedule-field="scheduleOrder" data-id="${attr(creative.id)}" value="${attr(creative.scheduleOrder || 0)}">
+    </label>
+    <button class="krio-btn schedule-posted-btn" type="button" data-action="markCreativePosted" data-id="${attr(creative.id)}">${icons.calendar} Postado</button>`;
+}
+
+function renderCreativeCard(creative, groupId = creative.groupId || "", flat = false, actions = "") {
+  const commentCount = asArray(creative.comments).length;
+  const status = normalizeApprovalStatus(creative.status);
+  const canDrag = status === "prov" && !flat;
+  return `
+    <article class="approval-creative ${flat ? "flat" : ""} ${attr(status)}" role="button" tabindex="0" draggable="${canDrag ? "true" : "false"}" data-action="openCreativeDetail" data-id="${attr(creative.id)}" data-group="${attr(groupId)}">
+      ${renderCreativeCover(creative)}
+      <div class="approval-creative-body">
+        <input class="approval-card-title-input" data-approval-inline="creativeTitle" data-id="${attr(creative.id)}" data-original-value="${attr(creative.title || "Sem título")}" value="${attr(creative.title || "Sem título")}" aria-label="Título da peça">
+        ${creative.caption ? `<span class="approval-caption">${esc(creative.caption)}</span>` : ""}
+        ${creative.groupName && flat ? `<span>${esc(creative.groupName)}</span>` : ""}
+        <small>${esc(approvalStatuses[status] || "Provisório")}${commentCount ? ` · ${commentCount} comentário(s)` : ""}</small>
+        ${creative.revisionAlert ? `<small class="approval-alert">Refação: ${esc(creative.revisionAlert)}</small>` : ""}
+        ${actions ? `<div class="approval-card-actions">${actions}</div>` : ""}
+      </div>
+    </article>`;
+}
+
+function openDemandDialog(id = "", defaults = {}) {
+  const existing = id ? findDemand(id)?.demand : null;
+  const existingRef = id ? findDemand(id) : null;
+  if (existingRef && !canViewPerson(existingRef.personId)) return;
+  const week = currentWeek();
+  const firstPerson = getVisibleProfiles()[0]?.id || currentPersonId() || getProfiles()[0]?.id || "";
+  const selectedPerson = canManageWorkspace()
+    ? (existingRef?.personId || defaults.personId || firstPerson)
+    : currentPersonId();
+  const selectedPersonProfile = getProfile(selectedPerson) || getProfiles()[0] || {};
+  const availableDemandTypes = getPersonDemandTypes(selectedPersonProfile);
+  if (existing?.type && !availableDemandTypes.some((type) => type.id === existing.type)) {
+    const legacyType = demandTypes.find((type) => type.id === existing.type);
+    if (legacyType) availableDemandTypes.push(legacyType);
+  }
+  if (!availableDemandTypes.length && !existing) {
+    $("#trackerDialogHost").innerHTML = `
+      <div class="tracker-dialog-backdrop" data-dialog-backdrop>
+        <div class="tracker-dialog tracker-dialog-compact" role="dialog" aria-modal="true">
+          <div class="tracker-dialog-head">
+            <strong>Sem tarefas atribuÃ­das</strong>
+            <button class="krio-icon-btn" type="button" data-action="closeDialog" aria-label="Fechar">${icons.close}</button>
+          </div>
+          <p class="tracker-dialog-copy">Ative pelo menos um tipo de tarefa para este membro na aba Equipe.</p>
+          <div class="tracker-dialog-actions"><button class="krio-btn primary" type="button" data-action="closeDialog">Entendi</button></div>
+        </div>
+      </div>`;
+    return;
+  }
+  const selectedType = existing?.type || (availableDemandTypes.some((type) => type.id === defaults.type) ? defaults.type : availableDemandTypes[0]?.id) || "mensal";
+
+  $("#trackerDialogHost").innerHTML = `
+    <div class="tracker-dialog-backdrop" data-dialog-backdrop>
+      <div class="tracker-dialog" role="dialog" aria-modal="true" aria-labelledby="demandDialogTitle">
+        <div class="tracker-dialog-head">
+          <strong id="demandDialogTitle">${existing ? "Editar demanda" : "Nova demanda"}</strong>
+          <button class="krio-icon-btn" type="button" data-action="closeDialog" aria-label="Fechar">${icons.close}</button>
+        </div>
+        <form id="demandForm" class="tracker-form" data-id="${attr(id)}">
+          <label class="tracker-field">Título
+            <input class="krio-input" name="title" required value="${attr(existing?.title || "")}" placeholder="Ex: Criar carrossel institucional">
+          </label>
+          <div class="form-row">
+            <label class="tracker-field">Responsável
+              <select class="krio-input" name="personId">${(canManageWorkspace() ? getProfiles() : getVisibleProfiles()).map((person) => `<option value="${attr(person.id)}" ${person.id === selectedPerson ? "selected" : ""}>${esc(person.name)}</option>`).join("")}</select>
+            </label>
+            <label class="tracker-field">Tipo
+              <select class="krio-input" name="type">${availableDemandTypes.map((type) => `<option value="${type.id}" ${type.id === selectedType ? "selected" : ""}>${type.label}</option>`).join("")}</select>
+            </label>
+          </div>
+          <div class="form-row">
+            <label class="tracker-field">Cliente
+              <input class="krio-input" name="client" value="${attr(existing?.client || "")}" placeholder="Cliente">
+            </label>
+            <label class="tracker-field">Prazo
+              <input class="krio-input" name="dueDate" type="date" value="${attr(existing?.dueDate || "")}">
+            </label>
+          </div>
+          ${existing ? `
+            <div class="form-row">
+              <label class="tracker-field">Tempo registrado (min)
+                <input class="krio-input" name="timeMinutes" type="number" min="0" step="1" value="${attr(existing?.timeMinutes || 0)}">
+              </label>
+              <label class="tracker-field">Dificuldade
+                <select class="krio-input" name="difficulty">
+                  ${["none", "some", "hard"].map((value) => `<option value="${value}" ${value === (existing?.difficulty || "none") ? "selected" : ""}>${difficultyLabel(value)}</option>`).join("")}
+                </select>
+              </label>
+            </div>
+            <label class="tracker-field">Observações
+              <textarea class="tracker-textarea" name="notes" placeholder="Dificuldade, dependência ou ponto de atenção">${esc(existing?.notes || "")}</textarea>
+            </label>` : ""}
+          <p class="tracker-dialog-copy">Semana: ${esc(week.title)}</p>
+          <div class="tracker-dialog-actions">
+            ${existing ? `<button class="krio-btn danger" type="button" data-action="deleteDemand" data-id="${attr(id)}">Excluir</button>` : ""}
+            <button class="krio-btn" type="button" data-action="closeDialog">Cancelar</button>
+            <button class="krio-btn primary" type="submit">Salvar</button>
+          </div>
+        </form>
+      </div>
+    </div>`;
+}
+
+function saveDemandForm(form) {
+  const formData = new FormData(form);
+  const id = form.dataset.id || "";
+  if (!id && !withinPlanLimit("demands")) {
+    openPlanDialog("Você atingiu o limite configurado para esta licença.");
+    return;
+  }
+  const requestedPersonId = String(formData.get("personId") || "");
+  const personId = canManageWorkspace() ? requestedPersonId : currentPersonId();
+  const requestedType = String(formData.get("type") || "mensal");
+  const allowedTypes = getPersonDemandTypes(getProfile(personId) || {});
+  if (!allowedTypes.length && !id) return;
+  const type = allowedTypes.some((candidate) => candidate.id === requestedType)
+    ? requestedType
+    : id && demandTypes.some((candidate) => candidate.id === requestedType)
+      ? requestedType
+      : allowedTypes[0]?.id || "mensal";
+  const payload = {
+    id: id || newId("dem"),
+    title: String(formData.get("title") || "").trim(),
+    client: String(formData.get("client") || "").trim(),
+    type,
+    dueDate: String(formData.get("dueDate") || ""),
+    estimateMinutes: 0,
+    difficulty: String(formData.get("difficulty") || "none"),
+    notes: String(formData.get("notes") || "").trim(),
+    done: false,
+    timeMinutes: Number(formData.get("timeMinutes") || 0),
+    createdAt: Date.now()
+  };
+
+  if (!payload.title) return;
+
+  const existing = id ? findDemand(id) : null;
+  if (existing) {
+    Object.assign(payload, {
+      done: existing.demand.done,
+      timeMinutes: Number(formData.get("timeMinutes") || existing.demand.timeMinutes || 0),
+      runningStartedAt: existing.demand.runningStartedAt || null,
+      createdAt: existing.demand.createdAt || Date.now(),
+      completedAt: existing.demand.completedAt || null
+    });
+    removeDemandFromWeek(existing.week, existing.personId, existing.type, id);
+  }
+
+  const week = currentWeek();
+  ensureWeekPerson(week, personId);
+  week.people[personId][type].push(payload);
+  closeDialogs();
+  saveAndRender();
+}
+
+function openPersonDialog(id = "") {
+  const person = id ? getProfile(id) : null;
+  $("#trackerDialogHost").innerHTML = `
+    <div class="tracker-dialog-backdrop" data-dialog-backdrop>
+      <div class="tracker-dialog" role="dialog" aria-modal="true" aria-labelledby="personDialogTitle">
+        <div class="tracker-dialog-head">
+          <strong id="personDialogTitle">${person ? "Editar pessoa" : "Nova pessoa"}</strong>
+          <button class="krio-icon-btn" type="button" data-action="closeDialog" aria-label="Fechar">${icons.close}</button>
+        </div>
+        <form id="personForm" class="tracker-form" data-id="${attr(id)}">
+          <label class="tracker-field">Nome
+            <input class="krio-input" name="name" required value="${attr(person?.name || "")}" placeholder="Nome da pessoa">
+          </label>
+          <label class="tracker-field">Função
+            <input class="krio-input" name="role" value="${attr(person?.role || "")}" placeholder="Designer, Social media...">
+          </label>
+          ${colorPickerField("Cor", "color", person?.color || "#3B82F6", "tracker-field")}
+          <div class="tracker-field">Tarefas atribuÃ­das
+            <div class="assignment-check-grid">
+              ${demandTypes.map((type) => `
+                <label class="assignment-check">
+                  <input type="checkbox" name="assignedTypes" value="${attr(type.id)}" ${isDemandTypeAssigned(person || {}, type.id) ? "checked" : ""}>
+                  <span>${esc(type.label)}</span>
+                </label>`).join("")}
+            </div>
+          </div>
+          ${canManageWorkspace() ? `
+            <label class="tracker-field">UID de acesso
+              <input class="krio-input" name="accessUid" value="${attr(person?.accessUid || (/^person_/.test(person?.id || "") ? "" : person?.id || ""))}" placeholder="UID do login do colaborador">
+            </label>
+            <label class="tracker-field">Papel no sistema
+              <select class="krio-input" name="accessRole">
+                ${["member", "admin"].map((role) => `<option value="${role}" ${role === (person?.accessRole || "member") ? "selected" : ""}>${accessRoleLabel(role)}</option>`).join("")}
+              </select>
+            </label>` : ""}
+          <div class="tracker-dialog-actions">
+            <button class="krio-btn" type="button" data-action="closeDialog">Cancelar</button>
+            <button class="krio-btn primary" type="submit">Salvar</button>
+          </div>
+        </form>
+      </div>
+    </div>`;
+}
+
+function savePersonForm(form) {
+  const formData = new FormData(form);
+  const accessUid = String(formData.get("accessUid") || "").trim();
+  const id = form.dataset.id || accessUid || newId("person");
+  if (!form.dataset.id && !withinPlanLimit("profiles")) {
+    openPlanDialog("Você atingiu o limite configurado para esta licença.");
+    return;
+  }
+  const name = String(formData.get("name") || "").trim();
+  if (!name) return;
+  const existing = state.data.profiles[id] || {};
+  const assignedTypes = formData.getAll("assignedTypes").map(String).filter((typeId) => demandTypes.some((type) => type.id === typeId));
+
+  state.data.profiles[id] = {
+    id,
+    name,
+    role: String(formData.get("role") || "Equipe").trim(),
+    color: String(formData.get("color") || "#3B82F6"),
+    accessUid,
+    accessRole: String(formData.get("accessRole") || "member"),
+    assignedTypes
+  };
+  state.data.tracker.weeks.forEach((week) => ensureWeekPerson(week, id));
+  if (accessUid && canManageWorkspace()) {
+    grantWorkspaceMembership(accessUid, state.data.profiles[id].accessRole);
+  }
+  closeDialogs();
+  saveAndRender();
+}
+
+function deletePerson(id) {
+  const profiles = getProfiles();
+  if (profiles.length <= 1) return;
+  const accessUid = state.data.profiles[id]?.accessUid || (/^person_/.test(id) ? "" : id);
+  delete state.data.profiles[id];
+  state.data.tracker.weeks.forEach((week) => {
+    delete week.people[id];
+  });
+  if (accessUid && canManageWorkspace() && state.firebase?.db && !state.demoMode && state.tenantId !== "local") {
+    state.firebase.set(state.firebase.ref(state.firebase.db, `memberships/${accessUid}/${state.tenantId}`), null);
+  }
+  saveAndRender();
+}
+
+function togglePersonDemandType(personId, typeId, button = null) {
+  const person = state.data.profiles?.[personId];
+  if (!person || !demandTypes.some((type) => type.id === typeId)) return;
+  const current = new Set(assignedDemandTypes(person));
+  if (current.has(typeId)) {
+    current.delete(typeId);
+  } else {
+    current.add(typeId);
+  }
+  person.assignedTypes = defaultAssignedDemandTypes().filter((id) => current.has(id));
+  const enabled = current.has(typeId);
+  if (button) {
+    button.classList.toggle("active", enabled);
+    button.setAttribute("aria-pressed", String(enabled));
+    const stateLabel = button.querySelector("[data-toggle-state]");
+    if (stateLabel) stateLabel.textContent = enabled ? "On" : "Off";
+  }
+  persist();
+}
+
+function openClientDialog(id = "") {
+  const client = id ? getClient(id) : null;
+  $("#approvalDialogHost").innerHTML = `
+    <div class="approval-dialog-backdrop" data-dialog-backdrop>
+      <div class="approval-dialog" role="dialog" aria-modal="true" aria-labelledby="clientDialogTitle">
+        <div class="approval-dialog-head">
+          <div><strong id="clientDialogTitle">${client ? "Editar cliente" : "Novo cliente"}</strong><span>Organize as peças por marca.</span></div>
+          <button class="krio-icon-btn" type="button" data-action="closeDialog" aria-label="Fechar">${icons.close}</button>
+        </div>
+        <form id="clientForm" class="approval-form" data-id="${attr(id)}">
+          <div class="approval-client-logo-preview">
+            ${clientAvatar(client || { name: "Cliente", color: "#3B82F6" })}
+            <span>Use um logo para substituir as iniciais do avatar.</span>
+          </div>
+          <label class="approval-field">Nome
+            <input class="krio-input" name="name" required value="${attr(client?.name || "")}" placeholder="Nome do cliente">
+          </label>
+          <label class="approval-field">Email de acesso
+            <input class="krio-input" name="email" type="email" value="${attr(client?.email || "")}" placeholder="cliente@empresa.com">
+          </label>
+          ${colorPickerField("Cor", "color", client?.color || "#3B82F6", "approval-field")}
+          <label class="approval-field">Logo do cliente
+            <input class="krio-input" name="logoFile" type="file" accept="image/*">
+          </label>
+          <div class="approval-dialog-actions">
+            ${client ? `<button class="krio-btn danger" type="button" data-action="deleteClient" data-id="${attr(id)}">Excluir</button>` : ""}
+            <button class="krio-btn" type="button" data-action="closeDialog">Cancelar</button>
+            <button class="krio-btn primary" type="submit">Salvar</button>
+          </div>
+        </form>
+      </div>
+    </div>`;
+}
+
+async function saveClientForm(form) {
+  const formData = new FormData(form);
+  const id = form.dataset.id || newId("client");
+  if (!form.dataset.id && !withinPlanLimit("clients")) {
+    openPlanDialog("Você atingiu o limite configurado para esta licença.");
+    return;
+  }
+  const name = String(formData.get("name") || "").trim();
+  if (!name) return;
+  const existing = state.data.approval.clients[id] || { groups: {} };
+  const logoFile = formData.get("logoFile");
+  const logoUrl = logoFile?.size ? await fileToDataUrl(logoFile) : existing.logoUrl || "";
+
+  state.data.approval.clients[id] = {
+    ...existing,
+    id,
+    name,
+    email: String(formData.get("email") || "").trim().toLowerCase(),
+    color: String(formData.get("color") || "#3B82F6"),
+    logoUrl
+  };
+  state.approvalClientId = id;
+  state.approvalStatus = "prov";
+  closeDialogs();
+  saveAndRender();
+}
+
+function deleteClient(id) {
+  delete state.data.approval.clients[id];
+  if (state.approvalClientId === id) state.approvalClientId = null;
+  closeDialogs();
+  saveAndRender();
+}
+
+function openGroupDialog(id = "") {
+  const client = getClient(state.approvalClientId);
+  if (!client) {
+    openClientDialog();
+    return;
+  }
+
+  const group = id ? client.groups?.[id] : null;
+  $("#approvalDialogHost").innerHTML = `
+    <div class="approval-dialog-backdrop" data-dialog-backdrop>
+      <div class="approval-dialog" role="dialog" aria-modal="true" aria-labelledby="groupDialogTitle">
+        <div class="approval-dialog-head">
+          <div><strong id="groupDialogTitle">${group ? "Renomear grupo" : "Novo grupo"}</strong><span>${esc(client.name)}</span></div>
+          <button class="krio-icon-btn" type="button" data-action="closeDialog" aria-label="Fechar">${icons.close}</button>
+        </div>
+        <form id="groupForm" class="approval-form" data-id="${attr(id)}">
+          <label class="approval-field">Nome do grupo
+            <input class="krio-input" name="name" required value="${attr(group?.name || "")}" placeholder="Semana 1, Janeiro, Stories...">
+          </label>
+          <div class="approval-dialog-actions">
+            <button class="krio-btn" type="button" data-action="closeDialog">Cancelar</button>
+            <button class="krio-btn primary" type="submit">Salvar</button>
+          </div>
+        </form>
+      </div>
+    </div>`;
+}
+
+function saveGroupForm(form) {
+  const client = getClient(state.approvalClientId);
+  if (!client) return;
+
+  const name = String(new FormData(form).get("name") || "").trim();
+  if (!name) return;
+
+  client.groups ||= {};
+  const id = form.dataset.id || newId("group");
+  client.groups[id] = {
+    ...(client.groups[id] || { cards: {} }),
+    id,
+    name,
+    createdAt: client.groups[id]?.createdAt || Date.now()
+  };
+  state.approvalStatus = "prov";
+  closeDialogs();
+  saveAndRender();
+}
+
+function deleteGroup(id) {
+  const client = getClient(state.approvalClientId);
+  if (!client?.groups?.[id]) return;
+  delete client.groups[id];
+  saveAndRender();
+}
+
+function openCreativeDialog(id = "", defaults = {}) {
+  let client = getClient(state.approvalClientId);
+  if (!client) {
+    client = getClients()[0];
+    state.approvalClientId = client?.id || null;
+  }
+  if (!client) {
+    openClientDialog();
+    return;
+  }
+
+  const groups = getApprovalGroups(client);
+  if (!groups.length) {
+    openGroupDialog();
+    return;
+  }
+
+  const found = id ? findCreative(id, client) : null;
+  const creative = found?.creative || null;
+  const selectedGroupId = defaults.groupId || found?.groupId || groups[0]?.id || "";
+  const media = creative ? getCreativeMedia(creative) : [];
+  const preview = renderCreativeMediaPreview(media);
+  const driveUrl = creative?.driveUrl || getCreativeLinks(creative || {})[0]?.url || "";
+  $("#approvalDialogHost").innerHTML = `
+    <div class="approval-dialog-backdrop" data-dialog-backdrop>
+      <div class="approval-dialog" role="dialog" aria-modal="true" aria-labelledby="creativeDialogTitle">
+        <div class="approval-dialog-head">
+          <div><strong id="creativeDialogTitle">${creative ? "Editar peça" : "Nova peça"}</strong><span>${esc(client.name)}</span></div>
+          <button class="krio-icon-btn" type="button" data-action="closeDialog" aria-label="Fechar">${icons.close}</button>
+        </div>
+        <form id="creativeForm" class="approval-form" data-id="${attr(id)}">
+          <label class="approval-field">Título
+            <input class="krio-input" name="title" required value="${attr(creative?.title || "")}" placeholder="Ex: Post campanha de lançamento">
+          </label>
+          <label class="approval-field">Legenda
+            <textarea class="approval-textarea" name="caption" placeholder="Legenda do post, se houver">${esc(creative?.caption || "")}</textarea>
+          </label>
+          <label class="approval-field">Link do Drive/Reels
+            <input class="krio-input" name="driveUrl" value="${attr(driveUrl)}" placeholder="https://drive.google.com/...">
+          </label>
+          <label class="approval-field">Grupo
+            <select class="krio-input" name="groupId">
+              ${groups.map((group) => `<option value="${attr(group.id)}" ${group.id === selectedGroupId ? "selected" : ""}>${esc(group.name)}</option>`).join("")}
+            </select>
+          </label>
+          <div class="approval-field">
+            Imagens
+            <div class="approval-upload-zone" data-approval-upload-zone>
+              <div id="creativeUploadPreview" class="approval-upload-preview">${preview}</div>
+              <input id="creativeImageFile" class="approval-file-input" name="imageFiles" type="file" accept="image/*" multiple>
+              <button class="approval-upload-button" type="button" data-action="triggerImageUpload" title="Enviar imagens" aria-label="Enviar imagens">${icons.upload}</button>
+            </div>
+          </div>
+          <div class="approval-dialog-actions">
+            <button class="krio-btn" type="button" data-action="closeDialog">Cancelar</button>
+            <button class="krio-btn primary" type="submit">Salvar</button>
+          </div>
+        </form>
+      </div>
+    </div>`;
+}
+
+async function saveCreativeForm(form) {
+  const client = getClient(state.approvalClientId);
+  if (!client) return;
+
+  const formData = new FormData(form);
+  const id = form.dataset.id || newId("creative");
+  const title = String(formData.get("title") || "").trim();
+  if (!title) return;
+
+  client.groups ||= {};
+  const groupId = String(formData.get("groupId") || "");
+  const targetGroup = client.groups[groupId];
+  if (!targetGroup) return;
+
+  const existing = findCreative(id, client);
+  if (existing && existing.groupId !== groupId) {
+    delete existing.group.cards[id];
+  }
+
+  const imageFiles = formData.getAll("imageFiles").filter((file) => file?.size && file.type?.startsWith("image/"));
+  const uploadedMedia = await Promise.all(imageFiles.map(async (file, index) => ({
+    id: newId("media"),
+    type: "image",
+    url: await fileToDataUrl(file, { outputType: "image/jpeg", quality: 0.78, maxSide: 1440, background: "#ffffff" }),
+    label: file.name || `Imagem ${index + 1}`,
+    createdAt: Date.now()
+  })));
+  const driveUrl = String(formData.get("driveUrl") || "").trim();
+  const existingMedia = existing?.creative ? getCreativeMedia(existing.creative) : [];
+  const existingLink = existingMedia.find((item) => item.type === "link");
+  const linkMedia = driveUrl
+    ? [{
+      id: existingLink?.id || newId("media"),
+      type: "link",
+      url: driveUrl,
+      label: "Drive/Reels",
+      createdAt: existingLink?.createdAt || Date.now()
+    }]
+    : [];
+  const media = [
+    ...existingMedia.filter((item) => item.type === "image"),
+    ...uploadedMedia.filter((item) => item.url),
+    ...linkMedia
+  ];
+  const firstImage = media.find((item) => item.type === "image")?.url || "";
+  targetGroup.cards ||= {};
+  targetGroup.cards[id] = {
+    ...(existing?.creative || { comments: [] }),
+    id,
+    title,
+    caption: String(formData.get("caption") || "").trim(),
+    status: normalizeApprovalStatus(existing?.creative?.status || "prov"),
+    media,
+    imageUrl: firstImage,
+    driveUrl,
+    groupId,
+    createdAt: existing?.creative?.createdAt || Date.now(),
+    updatedAt: Date.now()
+  };
+  state.approvalStatus = targetGroup.cards[id].status || "prov";
+  closeDialogs();
+  saveAndRender();
+}
+
+function openCreativeDetail(id) {
+  const found = findCreative(id);
+  const creative = found?.creative;
+  if (!creative) return;
+  const status = normalizeApprovalStatus(creative.status);
+
+  $("#approvalDialogHost").innerHTML = `
+    <div class="approval-dialog-backdrop" data-dialog-backdrop>
+      <div class="approval-detail" role="dialog" aria-modal="true" aria-labelledby="creativeDetailTitle">
+        <div class="approval-dialog-head">
+          <div><strong id="creativeDetailTitle">${esc(creative.title)}</strong><span>${esc(found.group?.name || "Grupo")} · ${esc(approvalStatuses[status] || "Provisório")}</span></div>
+          <button class="krio-icon-btn" type="button" data-action="closeDialog" aria-label="Fechar">${icons.close}</button>
+        </div>
+        ${renderCreativeMediaDetail(creative)}
+        <div class="approval-status-actions">
+          ${renderCreativeDetailActions(found)}
+        </div>
+        ${creative.caption ? `<div class="approval-caption-block"><strong>Legenda</strong><p>${esc(creative.caption)}</p></div>` : ""}
+        <div class="approval-dialog-copy">Status atual: <strong>${esc(approvalStatuses[status])}</strong>${creative.revisionAlert ? `<br>Refação: ${esc(creative.revisionAlert)}` : ""}</div>
+        <section class="approval-comments">
+          <h3>Comentários</h3>
+          <div class="approval-comment-list">
+            ${asArray(creative.comments).map((comment) => `
+              <article class="approval-comment">
+                <strong>${esc(comment.author || "Equipe")}</strong>
+                <p>${esc(comment.text)}</p>
+                <span>${esc(formatDateTime(comment.createdAt))}</span>
+              </article>`).join("") || `<div class="approval-empty small">Sem comentários ainda.</div>`}
+          </div>
+          <form id="commentForm" class="approval-comment-form" data-id="${attr(id)}">
+            <input class="krio-input" name="comment" required placeholder="Adicionar comentário">
+            <button class="krio-btn primary" type="submit">Enviar</button>
+          </form>
+        </section>
+      </div>
+    </div>`;
+}
+
+function renderCreativeDetailActions(found) {
+  const creative = found.creative;
+  const id = creative.id;
+  const clientName = found.client?.name || "cliente";
+  const status = normalizeApprovalStatus(creative.status);
+
+  if (status === "prov") {
+    return `
+      <button class="krio-btn primary" type="button" data-action="setCreativeStatus" data-id="${attr(id)}" data-status="internalApproved">${icons.check} Aprovado internamente</button>
+      <button class="krio-btn danger" type="button" data-action="setCreativeStatus" data-id="${attr(id)}" data-status="internalRejected">Reprovado internamente</button>
+      <button class="krio-icon-btn" type="button" title="Editar" aria-label="Editar" data-action="openCreativeDialog" data-id="${attr(id)}">${icons.edit}</button>
+      <button class="krio-icon-btn danger" type="button" title="Excluir" aria-label="Excluir" data-action="deleteCreative" data-id="${attr(id)}">${icons.trash}</button>`;
+  }
+
+  if (status === "internalApproved") {
+    return `
+      <button class="krio-btn primary" type="button" data-action="sendToClientBoard" data-id="${attr(id)}">${icons.send} Mandar para quadro do cliente: ${esc(clientName)}</button>
+      <button class="krio-icon-btn" type="button" title="Editar mídia" aria-label="Editar mídia" data-action="openCreativeDialog" data-id="${attr(id)}">${icons.edit}</button>`;
+  }
+
+  if (status === "internalRejected") {
+    return `
+      <button class="krio-btn primary" type="button" data-action="markCreativeCorrected" data-id="${attr(id)}">${icons.check} Corrigido</button>
+      <button class="krio-icon-btn" type="button" title="Editar" aria-label="Editar" data-action="openCreativeDialog" data-id="${attr(id)}">${icons.edit}</button>
+      <button class="krio-icon-btn danger" type="button" title="Excluir" aria-label="Excluir" data-action="deleteCreative" data-id="${attr(id)}">${icons.trash}</button>`;
+  }
+
+  if (status === "clientReview") {
+    return `<span class="approval-status clientReview">Aguardando ${esc(clientName)}</span>`;
+  }
+
+  if (status === "scheduled") {
+    return `
+      <button class="krio-btn" type="button" data-action="markCreativePosted" data-id="${attr(id)}">${icons.calendar} Marcar como postado</button>
+      <button class="krio-icon-btn" type="button" title="Editar mídia" aria-label="Editar mídia" data-action="openCreativeDialog" data-id="${attr(id)}">${icons.edit}</button>`;
+  }
+
+  return `<span class="approval-status posted">Histórico</span>`;
+}
+
+function saveCommentForm(form) {
+  const found = findCreative(form.dataset.id);
+  if (!found?.creative) return;
+  const text = String(new FormData(form).get("comment") || "").trim();
+  if (!text) return;
+  const creative = found.creative;
+  creative.comments ||= [];
+  creative.comments.push({
+    id: newId("comment"),
+    author: state.user?.displayName || "Equipe",
+    text,
+    createdAt: Date.now()
+  });
+  persist();
+  openCreativeDetail(creative.id);
+  renderApproval();
+}
+
+function setCreativeStatus(id, status) {
+  const found = findCreative(id);
+  const creative = found?.creative;
+  if (!creative) return;
+  const nextStatus = normalizeApprovalStatus(status);
+  if (!approvalStatuses[nextStatus]) return;
+  creative.status = nextStatus;
+  if (nextStatus === "internalApproved") {
+    creative.internalApprovedAt = Date.now();
+    creative.revisionAlert = "";
+  }
+  if (nextStatus === "internalRejected") {
+    creative.internalRejectedAt = Date.now();
+  }
+  creative.updatedAt = Date.now();
+  state.approvalStatus = nextStatus || "prov";
+  closeDialogs();
+  saveAndRender();
+}
+
+function sendToClientBoard(id) {
+  const found = findCreative(id);
+  const creative = found?.creative;
+  if (!creative) return;
+  creative.status = "clientReview";
+  creative.sentToClientAt = Date.now();
+  creative.updatedAt = Date.now();
+  state.approvalStatus = "clientReview";
+  closeDialogs();
+  saveAndRender();
+}
+
+function clientApproveCreative(id) {
+  const found = findCreative(id);
+  const creative = found?.creative;
+  if (!creative) return;
+  creative.status = "scheduled";
+  creative.clientApprovedAt = Date.now();
+  creative.revisionAlert = "";
+  creative.updatedAt = Date.now();
+  state.approvalStatus = "scheduled";
+  saveAndRender();
+}
+
+function openClientRejectionDialog(id) {
+  const found = findCreative(id);
+  if (!found?.creative) return;
+  $("#approvalDialogHost").innerHTML = `
+    <div class="approval-dialog-backdrop" data-dialog-backdrop>
+      <div class="approval-dialog" role="dialog" aria-modal="true" aria-labelledby="clientRejectionTitle">
+        <div class="approval-dialog-head">
+          <div><strong id="clientRejectionTitle">Pedido de ajuste</strong><span>${esc(found.client?.name || "Cliente")}</span></div>
+          <button class="krio-icon-btn" type="button" data-action="closeDialog" aria-label="Fechar">${icons.close}</button>
+        </div>
+        <form id="clientRejectionForm" class="approval-form" data-id="${attr(id)}">
+          <label class="approval-field">Comentário obrigatório
+            <textarea class="approval-textarea" name="comment" required placeholder="Explique o que precisa ser alterado"></textarea>
+          </label>
+          <div class="approval-dialog-actions">
+            <button class="krio-btn" type="button" data-action="closeDialog">Cancelar</button>
+            <button class="krio-btn danger" type="submit">Enviar reprovação</button>
+          </div>
+        </form>
+      </div>
+    </div>`;
+}
+
+function saveClientRejectionForm(form) {
+  const found = findCreative(form.dataset.id);
+  const creative = found?.creative;
+  if (!creative) return;
+  const text = String(new FormData(form).get("comment") || "").trim();
+  if (!text) return;
+  creative.status = "prov";
+  creative.revisionAlert = text;
+  creative.clientRejectedAt = Date.now();
+  creative.updatedAt = Date.now();
+  creative.comments ||= [];
+  creative.comments.push({
+    id: newId("comment"),
+    author: found.client?.name || "Cliente",
+    text,
+    createdAt: Date.now()
+  });
+  state.approvalStatus = "prov";
+  closeDialogs();
+  saveAndRender();
+}
+
+function markCreativeCorrected(id) {
+  const found = findCreative(id);
+  const creative = found?.creative;
+  if (!creative) return;
+  creative.status = "prov";
+  creative.revisionAlert = "";
+  creative.correctedAt = Date.now();
+  creative.updatedAt = Date.now();
+  state.approvalStatus = "prov";
+  closeDialogs();
+  saveAndRender();
+}
+
+function markCreativePosted(id) {
+  const found = findCreative(id);
+  const creative = found?.creative;
+  if (!creative) return;
+  creative.status = "posted";
+  creative.postedAt = Date.now();
+  creative.updatedAt = Date.now();
+  state.approvalStatus = "posted";
+  closeDialogs();
+  saveAndRender();
+}
+
+function deleteCreative(id) {
+  const found = findCreative(id);
+  if (!found?.group?.cards?.[id]) return;
+  delete found.group.cards[id];
+  closeDialogs();
+  saveAndRender();
+}
+
+function moveCreativeToGroup(id, targetGroupId) {
+  const client = getClient(state.approvalClientId);
+  const found = findCreative(id, client);
+  const targetGroup = client?.groups?.[targetGroupId];
+  if (!found?.creative || !targetGroup) return;
+
+  targetGroup.cards ||= {};
+  targetGroup.cards[id] = {
+    ...found.creative,
+    groupId: targetGroupId,
+    updatedAt: Date.now()
+  };
+  if (found.groupId !== targetGroupId) delete found.group.cards[id];
+  state.approvalStatus = "prov";
+  saveAndRender();
+}
+
+function moveGroupBefore(groupId, targetGroupId) {
+  const client = getClient(state.approvalClientId);
+  if (!client?.groups?.[groupId] || groupId === targetGroupId) return;
+
+  const groups = getApprovalGroups(client);
+  const groupIds = groups.map((group) => group.id).filter((id) => id !== groupId);
+  const targetIndex = targetGroupId ? groupIds.indexOf(targetGroupId) : -1;
+  groupIds.splice(targetIndex >= 0 ? targetIndex : groupIds.length, 0, groupId);
+  groupIds.forEach((id, index) => {
+    client.groups[id].order = index + 1;
+    client.groups[id].updatedAt = Date.now();
+  });
+  saveAndRender();
+}
+
+function openLightbox(src) {
+  if (!src) return;
+  $("#approvalDialogHost").insertAdjacentHTML("beforeend", `
+    <div class="approval-lightbox" data-action="closeLightbox">
+      <img src="${attr(src)}" alt="">
+      <button class="krio-icon-btn" type="button" data-action="closeLightbox" aria-label="Fechar">${icons.close}</button>
+    </div>`);
+}
+
+function closeLightbox() {
+  $(".approval-lightbox")?.remove();
+}
+
+function openPlanDialog(message = "") {
+  const license = currentPlan();
+  const usage = planUsage();
+  const meta = state.data?.meta || {};
+  const statusLabel = meta.licenseStatus === "active" || meta.status === "active" || state.demoMode || state.tenantId === "local"
+    ? "Ativa"
+    : "Aguardando liberação manual";
+  const activatedAt = meta.licenseActivatedAt ? formatDateTime(meta.licenseActivatedAt) : "";
+
+  $("#trackerDialogHost").innerHTML = `
+    <div class="tracker-dialog-backdrop" data-dialog-backdrop>
+      <div class="tracker-dialog" role="dialog" aria-modal="true" aria-labelledby="planDialogTitle">
+        <div class="tracker-dialog-head">
+          <strong id="planDialogTitle">Licença e acesso</strong>
+          <button class="krio-icon-btn" type="button" data-action="closeDialog" aria-label="Fechar">${icons.close}</button>
+        </div>
+        ${message ? `<div class="toast warn" style="margin-bottom:14px">${esc(message)}</div>` : ""}
+        <p class="tracker-dialog-copy">Produto atual: <strong>${esc(license.name)}</strong> · ${esc(statusLabel)}${activatedAt ? ` · Liberada em ${esc(activatedAt)}` : ""}</p>
+        <div class="tracker-report-grid" style="margin:16px 0">
+          ${usageMetric("Pessoas", usage.profiles, license.limits.profiles)}
+          ${usageMetric("Clientes", usage.clients, license.limits.clients)}
+          ${usageMetric("Peças", usage.creatives, license.limits.creatives)}
+          ${usageMetric("Demandas", usage.demands, license.limits.demands)}
+        </div>
+        <div class="tracker-list">
+          <article class="tracker-report-card">
+            <div>
+              <strong>Acesso integral</strong>
+              <span>Tracker, Operação, Aprovação, relatórios e uso contínuo dentro do ambiente liberado para o cliente.</span>
+              <div class="tracker-demand-meta" style="margin-top:8px">
+                ${license.features.map((feature) => `<span class="tracker-demand-chip">${esc(featureLabel(feature))}</span>`).join("")}
+              </div>
+            </div>
+          </article>
+          <article class="tracker-report-card">
+            <div>
+              <strong>Venda manual</strong>
+              <span>Pagamento, contrato, suporte e liberação de novos clientes são controlados fora do app por você.</span>
+            </div>
+          </article>
+        </div>
+        <div class="divider"></div>
+        <div class="tracker-dialog-actions">
+          <button class="krio-btn" type="button" data-action="closeDialog">Fechar</button>
+        </div>
+        <p class="tracker-dialog-copy">Esta licença é gerenciada diretamente pelo responsável do Krio.</p>
+      </div>
+    </div>`;
+}
+
+function usageMetric(label, used, limit) {
+  return `<div class="tracker-report-card"><div><strong>${esc(label)}</strong><span>${esc(used)} de ${esc(formatLimit(limit))}</span></div></div>`;
+}
+
+async function requestPlan(planId) {
+  openPlanDialog("O Krio agora está em modo de licença manual. Novos acessos são liberados por você após a venda direta.");
+}
+
+async function openBillingPortal() {
+  openPlanDialog("Pagamentos são tratados manualmente fora do app neste modelo comercial.");
+}
+
+function currentPlan() {
+  return LICENSE_PRODUCT;
+}
+
+function featureEnabled(feature) {
+  return currentPlan().features.includes(feature);
+}
+
+function withinPlanLimit(metric) {
+  return true;
+}
+
+function planUsage() {
+  if (!state.data) return { profiles: 0, clients: 0, creatives: 0, demands: 0 };
+  const clients = getClients();
+  return {
+    profiles: getProfiles().length,
+    clients: clients.length,
+    creatives: clients.reduce((sum, client) => sum + getCreatives(client).length, 0),
+    demands: getAllDemandRefs().length
+  };
+}
+
+function formatLimit(limit) {
+  return Number.isFinite(limit) ? limit : "ilimitado";
+}
+
+function featureLabel(feature) {
+  return {
+    tracker: "Tracker",
+    approval: "Aprovação",
+    operations: "Operação",
+    reports: "Relatórios",
+    manualAccess: "Licença manual"
+  }[feature] || feature;
+}
+
+function accessRoleLabel(role) {
+  return { owner: "Owner", admin: "Admin", member: "Colaborador" }[role] || "Colaborador";
+}
+
+async function grantWorkspaceMembership(uid, role = "member") {
+  if (!state.firebase?.db || state.demoMode || state.tenantId === "local" || !canManageWorkspace()) return;
+  const safeRole = role === "admin" ? "admin" : "member";
+  const payload = {
+    role: safeRole,
+    status: "active",
+    tenantId: state.tenantId,
+    updatedAt: Date.now(),
+    invitedBy: state.user?.uid || ""
+  };
+  try {
+    await state.firebase.set(state.firebase.ref(state.firebase.db, `memberships/${uid}/${state.tenantId}`), payload);
+  } catch (error) {
+    setSyncState("offline", "Perfil salvo, mas o acesso do colaborador não foi liberado.");
+  }
+}
+
+function closeDialogs() {
+  $("#trackerDialogHost").innerHTML = "";
+  $("#approvalDialogHost").innerHTML = "";
+}
+
+function moveWeek(delta) {
+  state.currentWeekIndex = Math.max(0, Math.min(state.data.tracker.weeks.length - 1, state.currentWeekIndex + delta));
+  renderTracker();
+}
+
+function createNextWeek() {
+  const weeks = state.data.tracker.weeks;
+  const last = weeks[weeks.length - 1] || createWeek(startOfWeek(new Date()));
+  const start = addDays(parseISODate(last.startDate), 7);
+  weeks.push(createWeek(start));
+  state.currentWeekIndex = weeks.length - 1;
+  persist();
+  renderTracker();
+}
+
+function deleteCurrentWeek() {
+  if (!canManageWorkspace()) return;
+  const week = currentWeek();
+  const index = state.data.tracker.weeks.findIndex((candidate) => candidate.id === week.id);
+  if (index < 0) return;
+  const [removed] = state.data.tracker.weeks.splice(index, 1);
+  const now = Date.now();
+  state.data.tracker.trash.unshift({
+    id: newId("trash_week"),
+    kind: "week",
+    title: removed.title || "Semana",
+    deletedAt: now,
+    quarantineUntil: now + (40 * 24 * 60 * 60 * 1000),
+    deletedBy: {
+      uid: state.user?.uid || "local",
+      name: state.user?.displayName || state.user?.email || "UsuÃ¡rio"
+    },
+    deletedByUid: state.user?.uid || "local",
+    week: removed
+  });
+  state.currentWeekIndex = Math.max(0, Math.min(index, state.data.tracker.weeks.length - 1));
+  if (!state.data.tracker.weeks.length) {
+    state.data.tracker.weeks.push(createWeek(startOfWeek(new Date()), state.data.profiles));
+  }
+  persist();
+  renderModuleActions();
+  renderTracker();
+  applyRoleVisibility();
+}
+
+function toggleDemand(id) {
+  const found = findDemand(id);
+  if (!found) return;
+  if (!found.demand.done) {
+    openCompleteDemandDialog(id);
+    return;
+  }
+  found.demand.done = false;
+  found.demand.completedAt = null;
+  saveAndRender();
+}
+
+function openCompleteDemandDialog(id) {
+  const found = findDemand(id);
+  const demand = found?.demand;
+  if (!demand) return;
+  $("#trackerDialogHost").innerHTML = `
+    <div class="tracker-dialog-backdrop" data-dialog-backdrop>
+      <div class="tracker-dialog" role="dialog" aria-modal="true" aria-labelledby="completeDemandTitle">
+        <div class="tracker-dialog-head">
+          <strong id="completeDemandTitle">Finalizar demanda</strong>
+          <button class="krio-icon-btn" type="button" data-action="closeDialog" aria-label="Fechar">${icons.close}</button>
+        </div>
+        <form id="completeDemandForm" class="tracker-form" data-id="${attr(id)}">
+          <div class="tracker-complete-summary">
+            <strong>${esc(demand.title)}</strong>
+            <span>${esc(found.person.name)} · ${esc(formatDuration(effectiveMinutes(demand)))}</span>
+          </div>
+          <label class="tracker-field">Dificuldade
+            <select class="krio-input" name="difficulty">
+              ${["none", "some", "hard"].map((value) => `<option value="${value}" ${value === (demand.difficulty || "none") ? "selected" : ""}>${difficultyLabel(value)}</option>`).join("")}
+            </select>
+          </label>
+          <label class="tracker-field">Observações
+            <textarea class="tracker-textarea" name="notes" placeholder="Alguma dificuldade, dependência ou ponto de atenção?">${esc(demand.notes || "")}</textarea>
+          </label>
+          <div class="tracker-dialog-actions">
+            <button class="krio-btn" type="button" data-action="closeDialog">Cancelar</button>
+            <button class="krio-btn primary" type="submit">${icons.check} Finalizar</button>
+          </div>
+        </form>
+      </div>
+    </div>`;
+}
+
+function saveCompleteDemandForm(form) {
+  const found = findDemand(form.dataset.id);
+  const demand = found?.demand;
+  if (!demand) return;
+  const formData = new FormData(form);
+  stopDemandTimer(demand);
+  demand.done = true;
+  demand.completedAt = Date.now();
+  demand.difficulty = String(formData.get("difficulty") || "none");
+  demand.notes = String(formData.get("notes") || "").trim();
+  closeDialogs();
+  saveAndRender();
+}
+
+function deleteDemand(id) {
+  const found = findDemand(id);
+  if (!found) return;
+  if (!canViewPerson(found.personId)) return;
+  removeDemandFromWeek(found.week, found.personId, found.type, id);
+  state.data.tracker.trash.unshift({
+    ...found.demand,
+    deletedAt: Date.now(),
+    deletedBy: {
+      uid: state.user?.uid || "local",
+      name: state.user?.displayName || state.user?.email || "Usuário"
+    },
+    deletedByUid: state.user?.uid || "local",
+    sourceWeekId: found.week.id,
+    sourcePersonId: found.personId,
+    sourceType: found.type
+  });
+  closeDialogs();
+  saveAndRender();
+}
+
+function restoreDemand(id) {
+  const index = state.data.tracker.trash.findIndex((item) => item.id === id);
+  if (index < 0) return;
+  if (state.data.tracker.trash[index].kind === "week") return restoreWeek(id);
+  if (!canManageWorkspace() && state.data.tracker.trash[index].deletedBy?.uid !== state.user?.uid && state.data.tracker.trash[index].deletedByUid !== state.user?.uid) return;
+  const [item] = state.data.tracker.trash.splice(index, 1);
+  const week = state.data.tracker.weeks.find((candidate) => candidate.id === item.sourceWeekId) || currentWeek();
+  const personId = canManageWorkspace()
+    ? (getProfile(item.sourcePersonId) ? item.sourcePersonId : getProfiles()[0].id)
+    : currentPersonId();
+  const type = demandTypes.some((candidate) => candidate.id === item.sourceType) ? item.sourceType : "mensal";
+  ensureWeekPerson(week, personId);
+  delete item.deletedAt;
+  delete item.deletedBy;
+  delete item.deletedByUid;
+  week.people[personId][type].push(item);
+  saveAndRender();
+}
+
+function restoreWeek(id) {
+  if (!canManageWorkspace()) return;
+  const index = state.data.tracker.trash.findIndex((item) => item.id === id && item.kind === "week");
+  if (index < 0) return;
+  const [item] = state.data.tracker.trash.splice(index, 1);
+  if (item.week) {
+    state.data.tracker.weeks.push(normalizeWeek(item.week, state.data.profiles));
+    state.data.tracker.weeks.sort((a, b) => a.startDate.localeCompare(b.startDate));
+    state.currentWeekIndex = state.data.tracker.weeks.findIndex((week) => week.id === item.week.id);
+  }
+  saveAndRender();
+}
+
+function deleteTrashItem(id) {
+  const item = state.data.tracker.trash.find((candidate) => candidate.id === id);
+  if (!item) return;
+  if (!canManageWorkspace() && item.deletedBy?.uid !== state.user?.uid && item.deletedByUid !== state.user?.uid) return;
+  state.data.tracker.trash = state.data.tracker.trash.filter((candidate) => candidate.id !== id);
+  saveAndRender();
+}
+
+function expireTrashQuarantine() {
+  const now = Date.now();
+  const before = state.data.tracker.trash.length;
+  state.data.tracker.trash = state.data.tracker.trash.filter((item) => !item.quarantineUntil || item.quarantineUntil > now);
+  return state.data.tracker.trash.length !== before;
+}
+
+function purgeTrash() {
+  if (canManageWorkspace()) {
+    state.data.tracker.trash = [];
+  } else {
+    const uid = state.user?.uid || "";
+    state.data.tracker.trash = state.data.tracker.trash.filter((item) => item.deletedBy?.uid !== uid && item.deletedByUid !== uid);
+  }
+  saveAndRender();
+}
+
+function toggleTimer(id) {
+  const found = findDemand(id);
+  if (!found) return;
+  if (!canViewPerson(found.personId)) return;
+  if (found.demand.runningStartedAt) {
+    stopDemandTimer(found.demand);
+  } else {
+    getAllDemandRefs().forEach(({ demand }) => stopDemandTimer(demand));
+    found.demand.runningStartedAt = Date.now();
+    found.demand.done = false;
+  }
+  saveAndRender();
+}
+
+function stopDemandTimer(demand) {
+  if (!demand.runningStartedAt) return;
+  const elapsed = Math.max(1, Math.round((Date.now() - demand.runningStartedAt) / 60000));
+  demand.timeMinutes = Number(demand.timeMinutes || 0) + elapsed;
+  demand.runningStartedAt = null;
+}
+
+function resetDemandTime(id) {
+  const found = findDemand(id);
+  if (!found) return;
+  found.demand.timeMinutes = 0;
+  found.demand.runningStartedAt = null;
+  saveAndRender();
+}
+
+function cycleDemandDifficulty(id, button = null) {
+  const found = findDemand(id);
+  if (!found) return;
+  const order = ["none", "some", "hard"];
+  const current = order.indexOf(found.demand.difficulty || "none");
+  const next = order[(current + 1) % order.length];
+  found.demand.difficulty = next;
+  if (button) {
+    button.className = `diff-badge diff-${next}`;
+    button.textContent = difficultyLabel(next);
+  }
+  persist();
+}
+
+function moveTrackerDemand(id, targetPersonId, targetType, targetId = "", insertAfter = false) {
+  if (!id || !targetPersonId || !targetType || !demandTypes.some((type) => type.id === targetType)) return;
+  const found = findDemand(id);
+  if (!found) return;
+
+  const week = found.week;
+  const sourceList = week.people?.[found.personId]?.[found.type] || [];
+  const sourceIndex = sourceList.findIndex((demand) => demand.id === id);
+  if (sourceIndex < 0) return;
+
+  const [demand] = sourceList.splice(sourceIndex, 1);
+  demand.type = targetType;
+
+  const targetPerson = ensureWeekPerson(week, targetPersonId);
+  const targetList = targetPerson[targetType];
+  let insertIndex = targetList.length;
+  if (targetId && targetId !== id) {
+    const targetIndex = targetList.findIndex((demandItem) => demandItem.id === targetId);
+    if (targetIndex >= 0) insertIndex = targetIndex + (insertAfter ? 1 : 0);
+  }
+
+  targetList.splice(Math.max(0, Math.min(insertIndex, targetList.length)), 0, demand);
+  saveAndRender();
+}
+
+function openTimerEditDialog(id) {
+  const found = findDemand(id);
+  const demand = found?.demand;
+  if (!demand) return;
+  const minutes = effectiveMinutes(demand);
+  $("#trackerDialogHost").innerHTML = `
+    <div class="tracker-dialog-backdrop" data-dialog-backdrop>
+      <div class="tracker-dialog tracker-dialog-compact" role="dialog" aria-modal="true" aria-labelledby="timerEditTitle">
+        <div class="tracker-dialog-head">
+          <strong id="timerEditTitle">Editar tempo</strong>
+          <button class="krio-icon-btn" type="button" data-action="closeDialog" aria-label="Fechar">${icons.close}</button>
+        </div>
+        <form id="timerEditForm" class="tracker-form" data-id="${attr(id)}" data-was-running="${demand.runningStartedAt ? "1" : "0"}">
+          <div class="tracker-complete-summary">
+            <strong>${esc(demand.title)}</strong>
+            <span>${esc(found.person.name)} · ${esc(formatDuration(minutes))}</span>
+          </div>
+          <label class="tracker-field">Tempo registrado
+            <input class="krio-input" name="timeText" value="${attr(formatDuration(minutes))}" placeholder="Ex: 1h 30m, 45m ou 90">
+          </label>
+          <div class="tracker-dialog-actions">
+            <button class="krio-btn" type="button" data-action="closeDialog">Cancelar</button>
+            <button class="krio-btn primary" type="submit">Salvar</button>
+          </div>
+        </form>
+      </div>
+    </div>`;
+}
+
+function saveTimerEditForm(form) {
+  const found = findDemand(form.dataset.id);
+  const demand = found?.demand;
+  if (!demand) return;
+  const formData = new FormData(form);
+  demand.timeMinutes = parseDurationToMinutes(String(formData.get("timeText") || ""));
+  demand.runningStartedAt = form.dataset.wasRunning === "1" && !demand.done ? Date.now() : null;
+  closeDialogs();
+  saveAndRender();
+}
+
+function openDemandNoteDialog(id) {
+  const found = findDemand(id);
+  const demand = found?.demand;
+  if (!demand) return;
+  $("#trackerDialogHost").innerHTML = `
+    <div class="tracker-dialog-backdrop" data-dialog-backdrop>
+      <div class="tracker-dialog tracker-dialog-compact" role="dialog" aria-modal="true" aria-labelledby="demandNoteTitle">
+        <div class="tracker-dialog-head">
+          <strong id="demandNoteTitle">${demand.notes ? "Editar observação" : "Adicionar observação"}</strong>
+          <button class="krio-icon-btn" type="button" data-action="closeDialog" aria-label="Fechar">${icons.close}</button>
+        </div>
+        <form id="demandNoteForm" class="tracker-form" data-id="${attr(id)}">
+          <div class="tracker-complete-summary">
+            <strong>${esc(demand.title)}</strong>
+            <span>${demand.client ? esc(demand.client) : esc(found.person.name)}</span>
+          </div>
+          <label class="tracker-field">Observação
+            <textarea class="tracker-textarea" name="notes" placeholder="Contexto, bloqueio ou ajuste importante">${esc(demand.notes || "")}</textarea>
+          </label>
+          <div class="tracker-dialog-actions">
+            <button class="krio-btn" type="button" data-action="closeDialog">Cancelar</button>
+            <button class="krio-btn primary" type="submit">Salvar</button>
+          </div>
+        </form>
+      </div>
+    </div>`;
+}
+
+function saveDemandNoteForm(form) {
+  const found = findDemand(form.dataset.id);
+  const demand = found?.demand;
+  if (!demand) return;
+  const formData = new FormData(form);
+  demand.notes = String(formData.get("notes") || "").trim();
+  closeDialogs();
+  saveAndRender();
+}
+
+function moveAgenda(delta) {
+  const cursor = parseISODate(state.agendaCursor);
+  const next = state.agendaView === "year"
+    ? new Date(cursor.getFullYear() + delta, 0, 1)
+    : state.agendaView === "month"
+      ? new Date(cursor.getFullYear(), cursor.getMonth() + delta, 1)
+      : addDays(cursor, delta * 7);
+  state.agendaCursor = isoDate(next);
+  renderTracker();
+}
+
+function openAgendaEventDialog(id = "", date = "") {
+  const event = id ? getAgendaEvent(id) : null;
+  const selectedDate = event?.date || date || state.agendaCursor || isoDate(new Date());
+  $("#trackerDialogHost").innerHTML = `
+    <div class="tracker-dialog-backdrop" data-dialog-backdrop>
+      <div class="tracker-dialog" role="dialog" aria-modal="true" aria-labelledby="agendaEventTitle">
+        <div class="tracker-dialog-head">
+          <strong id="agendaEventTitle">${event ? "Editar compromisso" : "Novo compromisso"}</strong>
+          <button class="krio-icon-btn" type="button" data-action="closeDialog" aria-label="Fechar">${icons.close}</button>
+        </div>
+        <form id="agendaEventForm" class="tracker-form" data-id="${attr(id)}">
+          <label class="tracker-field">TÃ­tulo
+            <input class="krio-input" name="title" required value="${attr(event?.title || "")}" placeholder="Ex: ReuniÃ£o de alinhamento">
+          </label>
+          <div class="form-row">
+            <label class="tracker-field">Tipo
+              <select class="krio-input" name="type">
+                ${agendaEventTypes.map((type) => `<option value="${attr(type.id)}" ${type.id === (event?.type || "meeting") ? "selected" : ""}>${esc(type.label)}</option>`).join("")}
+              </select>
+            </label>
+            <label class="tracker-field">Data
+              <input class="krio-input" name="date" type="date" required value="${attr(selectedDate)}">
+            </label>
+          </div>
+          <div class="form-row">
+            <label class="tracker-field">InÃ­cio
+              <input class="krio-input" name="time" type="time" value="${attr(event?.time || "")}">
+            </label>
+            <label class="tracker-field">Fim
+              <input class="krio-input" name="endTime" type="time" value="${attr(event?.endTime || "")}">
+            </label>
+          </div>
+          <label class="tracker-field">ObservaÃ§Ãµes
+            <textarea class="tracker-textarea" name="desc" placeholder="Contexto, link ou participantes">${esc(event?.desc || "")}</textarea>
+          </label>
+          <div class="tracker-dialog-actions">
+            ${event ? `<button class="krio-btn danger" type="button" data-action="deleteAgendaEvent" data-id="${attr(id)}">Excluir</button>` : ""}
+            <button class="krio-btn" type="button" data-action="closeDialog">Cancelar</button>
+            <button class="krio-btn primary" type="submit">Salvar</button>
+          </div>
+        </form>
+      </div>
+    </div>`;
+}
+
+function saveAgendaEventForm(form) {
+  const formData = new FormData(form);
+  const id = form.dataset.id || newId("event");
+  const title = String(formData.get("title") || "").trim();
+  const date = String(formData.get("date") || "").trim();
+  if (!title || !date) return;
+  state.data.tracker.events ||= [];
+  const existingIndex = state.data.tracker.events.findIndex((event) => event.id === id);
+  const existing = existingIndex >= 0 ? state.data.tracker.events[existingIndex] : {};
+  const payload = {
+    ...existing,
+    id,
+    title,
+    type: String(formData.get("type") || "meeting"),
+    date,
+    time: String(formData.get("time") || ""),
+    endTime: String(formData.get("endTime") || ""),
+    desc: String(formData.get("desc") || "").trim(),
+    createdBy: existing.createdBy || state.user?.uid || "local",
+    createdAt: existing.createdAt || Date.now(),
+    updatedAt: Date.now()
+  };
+  if (existingIndex >= 0) state.data.tracker.events[existingIndex] = payload;
+  else state.data.tracker.events.push(payload);
+  state.agendaCursor = date;
+  closeDialogs();
+  saveAndRender();
+}
+
+function deleteAgendaEvent(id) {
+  state.data.tracker.events = asArray(state.data.tracker.events).filter((event) => event.id !== id);
+  closeDialogs();
+  saveAndRender();
+}
+
+function getAgendaEvent(id) {
+  return asArray(state.data?.tracker?.events).find((event) => event.id === id) || null;
+}
+
+function exportTracker() {
+  const rows = getAllDemandRefs().map(({ week, person, demand }) => ({
+    semana: week.title,
+    responsavel: person.name,
+    tipo: demand.type,
+    titulo: demand.title,
+    cliente: demand.client || "",
+    prazo: demand.dueDate || "",
+    concluida: demand.done ? "sim" : "nao",
+    tempo: effectiveMinutes(demand)
+  }));
+  const blob = new Blob([JSON.stringify(rows, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "krio-tracker.json";
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+function printTracker() {
+  if (state.activeView === "tracker" && state.trackerView === "reports") {
+    const win = openReportWindow();
+    win?.addEventListener("load", () => win.print(), { once: true });
+    return;
+  }
+  window.print();
+}
+
+function openReportPreview() {
+  openReportWindow();
+}
+
+function openReportWindow() {
+  const html = buildTrackerReportHTML(currentWeek());
+  const win = window.open("", "_blank");
+  if (!win) return null;
+  win.document.open();
+  win.document.write(html);
+  win.document.close();
+  return win;
+}
+
+function downloadReportHtml() {
+  const week = currentWeek();
+  const html = buildTrackerReportHTML(week);
+  const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `relatorio-krio-${slugify(week.title)}-${isoDate(new Date())}.html`;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+function buildTrackerReportHTML(week) {
+  const refs = getWeekDemandRefs(week);
+  const stats = getWeekStats(week);
+  const people = getProfiles();
+  const generatedAt = new Date().toLocaleString("pt-BR");
+  const rowsByPerson = people.map((person) => {
+    const personRefs = refs.filter((ref) => ref.person.id === person.id);
+    const minutes = personRefs.reduce((sum, { demand }) => sum + effectiveMinutes(demand), 0);
+    return { person, refs: personRefs, minutes, done: personRefs.filter(({ demand }) => demand.done).length };
+  });
+
+  return `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Relatório KRIO - ${esc(week.title)}</title>
+<style>
+  :root{--ink:#172033;--muted:#667085;--line:#D8DEE9;--brand:#2563EB;--soft:#F4F7FB;--green:#059669;--orange:#D97706;--red:#DC2626}
+  *{box-sizing:border-box}
+  body{margin:0;background:#EEF2F7;color:var(--ink);font-family:Arial,Helvetica,sans-serif;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  .page{width:1120px;min-height:780px;margin:24px auto;background:#fff;border:1px solid var(--line);border-radius:22px;padding:30px;box-shadow:0 24px 80px rgba(23,32,51,.12)}
+  header{display:flex;align-items:flex-start;justify-content:space-between;border-bottom:1px solid var(--line);padding-bottom:20px;margin-bottom:20px}
+  .brand{display:flex;gap:14px;align-items:center}.mark{width:42px;height:42px;border-radius:12px;background:linear-gradient(135deg,#2563EB,#60A5FA);color:#fff;display:grid;place-items:center;font-weight:800}
+  h1{margin:0;font-size:28px;letter-spacing:-.04em}.sub{margin-top:5px;color:var(--muted);font-size:13px}
+  .kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:20px}.kpi{background:var(--soft);border:1px solid var(--line);border-radius:14px;padding:14px}.kpi span{display:block;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.08em}.kpi strong{display:block;margin-top:6px;font-size:24px}
+  .person{break-inside:avoid;border:1px solid var(--line);border-radius:16px;margin-top:14px;overflow:hidden}.person-head{display:flex;justify-content:space-between;gap:12px;background:#F8FAFC;padding:12px 14px;border-bottom:1px solid var(--line)}.person-head strong{font-size:15px}.person-head span{color:var(--muted);font-size:12px}
+  table{width:100%;border-collapse:collapse;font-size:12px}th,td{text-align:left;border-bottom:1px solid #EDF1F6;padding:9px 10px;vertical-align:top}th{color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.08em}tr:last-child td{border-bottom:0}
+  .tag{display:inline-block;border-radius:999px;padding:2px 7px;background:#EAF2FF;color:var(--brand);font-weight:700;font-size:10px}.done{color:var(--green)}.pend{color:var(--orange)}.hard{color:var(--red)}
+  .no-print{display:flex;justify-content:center;margin:18px auto}.no-print button{border:0;border-radius:12px;background:var(--brand);color:#fff;font-weight:800;padding:12px 20px;cursor:pointer}
+  @media print{ @page{size:A4 landscape;margin:0} body{background:#fff}.page{width:100vw;min-height:100vh;margin:0;border:0;border-radius:0;box-shadow:none}.no-print{display:none!important} }
+</style>
+</head>
+<body>
+<main class="page">
+  <header>
+    <div class="brand"><div class="mark">K</div><div><h1>Relatório KRIO</h1><div class="sub">${esc(week.title)} · gerado em ${esc(generatedAt)}</div></div></div>
+    <div class="sub">${esc(state.data?.meta?.name || "Workspace KRIO")}</div>
+  </header>
+  <section class="kpis">
+    <div class="kpi"><span>Demandas</span><strong>${stats.total}</strong></div>
+    <div class="kpi"><span>Concluídas</span><strong>${stats.done}</strong></div>
+    <div class="kpi"><span>Pendentes</span><strong>${stats.pending}</strong></div>
+    <div class="kpi"><span>Progresso</span><strong>${stats.progress}%</strong></div>
+    <div class="kpi"><span>Tempo</span><strong>${esc(formatDuration(stats.minutes))}</strong></div>
+  </section>
+  ${rowsByPerson.map(({ person, refs: personRefs, minutes, done }) => `
+    <section class="person">
+      <div class="person-head"><div><strong>${esc(person.name)}</strong><span> · ${esc(person.role || "Equipe")}</span></div><span>${done}/${personRefs.length} concluídas · ${esc(formatDuration(minutes))}</span></div>
+      <table>
+        <thead><tr><th>Demanda</th><th>Cliente</th><th>Tipo</th><th>Prazo</th><th>Status</th><th>Tempo</th><th>Obs</th></tr></thead>
+        <tbody>
+          ${personRefs.length ? personRefs.map(({ demand }) => `
+            <tr>
+              <td>${esc(demand.title)}</td>
+              <td>${esc(demand.client || "-")}</td>
+              <td><span class="tag">${esc(demandTypes.find((type) => type.id === demand.type)?.label || demand.type)}</span></td>
+              <td>${esc(demand.dueDate ? formatDate(demand.dueDate) : "-")}</td>
+              <td class="${demand.done ? "done" : "pend"}">${demand.done ? "Concluída" : "Pendente"}</td>
+              <td>${esc(formatDuration(effectiveMinutes(demand)))}</td>
+              <td class="${demand.difficulty === "hard" ? "hard" : ""}">${esc(demand.notes || difficultyLabel(demand.difficulty || "none"))}</td>
+            </tr>`).join("") : `<tr><td colspan="7">Sem demandas nesta semana.</td></tr>`}
+        </tbody>
+      </table>
+    </section>`).join("")}
+</main>
+<div class="no-print"><button onclick="window.print()">Imprimir / PDF</button></div>
+</body>
+</html>`;
+}
+
+function saveAndRender() {
+  persist();
+  render();
+}
+
+function persist() {
+  state.data.updatedAt = Date.now();
+  markLocalWrite();
+  saveLocalState();
+  if (!state.firebase?.db || state.demoMode || state.tenantId === "local") {
+    releaseLocalWrite(true);
+    return;
+  }
+
+  clearTimeout(state.saveTimer);
+  state.saveTimer = setTimeout(persistNow, 350);
+}
+
+async function persistNow() {
+  if (state.saveTimer) {
+    clearTimeout(state.saveTimer);
+    state.saveTimer = null;
+  }
+  markLocalWrite();
+  state.data.updatedAt = Date.now();
+  const localSaved = saveLocalState();
+  if (!state.firebase?.db || state.demoMode || state.tenantId === "local") {
+    releaseLocalWrite(true);
+    setSyncState(localSaved ? "online" : "offline", localSaved ? "Dados salvos localmente" : "Copia local cheia. Alteracoes mantidas nesta sessao.");
+    return;
+  }
+
+  try {
+    setSyncState("online", "Sincronizando...");
+    const trashPayload = buildTrashPayload();
+    const payload = JSON.parse(JSON.stringify({
+      ...(canManageWorkspace() ? { [`tenants/${state.tenantId}/profiles`]: state.data.profiles } : {}),
+      [`tenants/${state.tenantId}/tracker/weeks`]: state.data.tracker.weeks,
+      [`tenants/${state.tenantId}/tracker/events`]: state.data.tracker.events || [],
+      [`tenants/${state.tenantId}/approval`]: state.data.approval,
+      [canManageWorkspace() ? `tenants/${state.tenantId}/trash` : `tenants/${state.tenantId}/trash/${state.user.uid}`]: trashPayload,
+      [`tenants/${state.tenantId}/updatedAt`]: Date.now()
+    }));
+    await state.firebase.update(state.firebase.ref(state.firebase.db), payload);
+    releaseLocalWrite(true);
+    setSyncState("online", "Sincronizado");
+  } catch (error) {
+    releaseLocalWrite(false);
+    setSyncState("offline", "Falha ao sincronizar. Cópia local preservada.");
+  }
+}
+
+function buildTrashPayload() {
+  const trash = asArray(state.data.tracker.trash);
+  if (!canManageWorkspace()) {
+    const uid = state.user?.uid || "";
+    return collectionById(trash.filter((item) => item.deletedBy?.uid === uid || item.deletedByUid === uid));
+  }
+  return trash.reduce((acc, item) => {
+    const uid = item.deletedBy?.uid || item.deletedByUid || "unknown";
+    acc[uid] ||= {};
+    acc[uid][item.id] = item;
+    return acc;
+  }, {});
+}
+
+function collectionById(items) {
+  return asArray(items).reduce((acc, item) => {
+    if (item?.id) acc[item.id] = item;
+    return acc;
+  }, {});
+}
+
+function setSyncState(status, title) {
+  const chip = $("#syncChip");
+  if (!chip) return;
+  chip.classList.toggle("offline", status === "offline");
+  chip.title = title || (status === "offline" ? "Offline" : "Sincronizado");
+}
+
+function startTimerTick() {
+  clearInterval(state.timerTick);
+  state.timerTick = setInterval(() => {
+    const postedChanged = syncPostedCreatives();
+    const trashChanged = expireTrashQuarantine();
+    if (trashChanged) persist();
+    if (postedChanged && state.activeView === "approval") renderApproval();
+    if (trashChanged && state.activeView === "tracker" && state.trackerView === "trash") renderTracker();
+    updateLiveTimers();
+  }, 1000);
+}
+
+function updateLiveTimers() {
+  document.querySelectorAll("[data-live-timer]").forEach((node) => {
+    const found = findDemand(node.dataset.id);
+    if (!found?.demand) return;
+    const format = node.dataset.format || "clock";
+    node.textContent = format === "duration"
+      ? formatDuration(effectiveMinutes(found.demand))
+      : formatClock(effectiveSeconds(found.demand));
+  });
+}
+
+function normalizeTenant(raw, user) {
+  const seed = seedData(user);
+  const meta = {
+    ...(seed.meta || {}),
+    ...(raw?.meta || {})
+  };
+  meta.plan = "manual_license";
+  meta.licenseStatus ||= meta.status === "active" || state.demoMode || state.tenantId === "local" ? "active" : "manual";
+  meta.licenseType ||= "direct_sale";
+  const billing = {
+    ...(seed.billing || {}),
+    ...(raw?.billing || {})
+  };
+  billing.status ||= "manual_license";
+  billing.provider ||= "manual";
+
+  const profiles = raw?.profiles && Object.keys(raw.profiles).length ? raw.profiles : seed.profiles;
+  Object.entries(profiles).forEach(([id, profile]) => {
+    profiles[id] = {
+      id,
+      name: profile.name || "Pessoa",
+      role: profile.role || "Equipe",
+      color: profile.color || colorFromString(profile.name || id),
+      accessUid: profile.accessUid || (/^person_/.test(id) ? "" : id),
+      accessRole: ["admin", "member"].includes(profile.accessRole) ? profile.accessRole : "member",
+      assignedTypes: Array.isArray(profile.assignedTypes) ? profile.assignedTypes : defaultAssignedDemandTypes()
+    };
+  });
+
+  if (user?.uid && !profiles[user.uid]) {
+    profiles[user.uid] = {
+      id: user.uid,
+      name: user.displayName || user.email?.split("@")[0] || "Usuário",
+      role: "Owner",
+      color: "#3B82F6",
+      assignedTypes: defaultAssignedDemandTypes()
+    };
+  }
+
+  const weeks = asArray(raw?.tracker?.weeks).length
+    ? asArray(raw.tracker.weeks).map((week) => normalizeWeek(week, profiles))
+    : seed.tracker.weeks.map((week) => normalizeWeek(week, profiles));
+
+  const clients = raw?.approval?.clients && Object.keys(raw.approval.clients).length
+    ? raw.approval.clients
+    : seed.approval.clients;
+
+  Object.entries(clients).forEach(([id, client]) => {
+    clients[id] = normalizeApprovalClient(client, id);
+  });
+
+  return {
+    meta,
+    billing,
+    profiles,
+    tracker: {
+      weeks,
+      events: normalizeAgendaEvents(raw?.tracker?.events),
+      trash: flattenTrash(raw?.tracker?.trash || raw?.trash)
+    },
+    approval: {
+      clients
+    }
+  };
+}
+
+function normalizeProfiles(rawProfiles, user = state.user) {
+  const fallback = state.data?.profiles || seedData(user).profiles;
+  const profiles = normalizeObjectCollection(rawProfiles && Object.keys(rawProfiles).length ? rawProfiles : fallback);
+  Object.entries(profiles).forEach(([id, profile]) => {
+    profiles[id] = {
+      id,
+      name: profile.name || "Pessoa",
+      role: profile.role || "Equipe",
+      color: profile.color || colorFromString(profile.name || id),
+      logoUrl: profile.logoUrl || "",
+      accessUid: profile.accessUid || (/^person_/.test(id) ? "" : id),
+      accessRole: ["admin", "member"].includes(profile.accessRole) ? profile.accessRole : "member",
+      assignedTypes: Array.isArray(profile.assignedTypes) ? profile.assignedTypes : defaultAssignedDemandTypes()
+    };
+  });
+
+  if (user?.uid && !profiles[user.uid]) {
+    profiles[user.uid] = {
+      id: user.uid,
+      name: user.displayName || user.email?.split("@")[0] || "Usuario",
+      role: "Owner",
+      color: "#3B82F6",
+      accessUid: user.uid,
+      accessRole: "admin",
+      assignedTypes: defaultAssignedDemandTypes()
+    };
+  }
+
+  return profiles;
+}
+
+function normalizeApprovalState(rawApproval = {}) {
+  const clients = normalizeObjectCollection(rawApproval?.clients || {});
+  Object.entries(clients).forEach(([id, client]) => {
+    clients[id] = normalizeApprovalClient(client, id);
+  });
+  return { clients };
+}
+
+function normalizeAgendaEvents(value = []) {
+  return asArray(value).map((event) => ({
+    id: event.id || newId("event"),
+    title: event.title || "Compromisso",
+    type: event.type || "meeting",
+    date: event.date || isoDate(new Date()),
+    time: event.time || "",
+    endTime: event.endTime || "",
+    desc: event.desc || "",
+    createdBy: event.createdBy || "",
+    createdAt: event.createdAt || Date.now(),
+    updatedAt: event.updatedAt || event.createdAt || Date.now()
+  })).sort((a, b) => `${a.date}T${a.time || "00:00"}`.localeCompare(`${b.date}T${b.time || "00:00"}`));
+}
+
+function normalizeWeek(week, profiles) {
+  const start = week.startDate ? parseISODate(week.startDate) : startOfWeek(new Date());
+  const normalized = {
+    id: week.id || newId("week"),
+    title: week.title || weekRangeLabel(start),
+    startDate: week.startDate || isoDate(start),
+    endDate: week.endDate || isoDate(addDays(start, 6)),
+    people: week.people || {}
+  };
+  Object.keys(profiles).forEach((personId) => ensureWeekPerson(normalized, personId));
+  Object.keys(normalized.people).forEach((personId) => {
+    demandTypes.forEach((type) => {
+      normalized.people[personId][type.id] = asArray(normalized.people[personId][type.id]).map((demand) => ({
+        id: demand.id || newId("dem"),
+        title: demand.title || "Demanda",
+        client: demand.client || "",
+        type: demand.type || type.id,
+        dueDate: demand.dueDate || "",
+        estimateMinutes: Number(demand.estimateMinutes || 0),
+        difficulty: demand.difficulty || "none",
+        notes: demand.notes || "",
+        done: Boolean(demand.done),
+        timeMinutes: Number(demand.timeMinutes || 0),
+        runningStartedAt: demand.runningStartedAt || null,
+        createdAt: demand.createdAt || Date.now(),
+        completedAt: demand.completedAt || null
+      }));
+    });
+  });
+  return normalized;
+}
+
+function normalizeObjectCollection(value) {
+  if (!value) return {};
+  if (!Array.isArray(value)) return value;
+  return value.filter(Boolean).reduce((acc, item) => {
+    const id = item.id || newId("item");
+    acc[id] = { ...item, id };
+    return acc;
+  }, {});
+}
+
+function normalizeApprovalStatus(status = "prov") {
+  const current = approvalStatusAliases[status] || status || "prov";
+  return approvalStatuses[current] ? current : "prov";
+}
+
+function normalizeCreativeMedia(card = {}) {
+  const items = asArray(card.media).map((item) => normalizeMediaItem(item)).filter(Boolean);
+  if (card.imageUrl && !items.some((item) => item.type === "image" && item.url === card.imageUrl)) {
+    items.unshift({
+      id: card.imageMediaId || newId("media"),
+      type: "image",
+      url: card.imageUrl,
+      label: "Imagem",
+      createdAt: card.createdAt || Date.now()
+    });
+  }
+  const linkUrl = card.driveUrl || card.reelUrl || card.videoUrl || card.mediaUrl || "";
+  if (linkUrl && !items.some((item) => item.type === "link" && item.url === linkUrl)) {
+    items.push({
+      id: card.linkMediaId || newId("media"),
+      type: "link",
+      url: linkUrl,
+      label: "Drive/Reels",
+      createdAt: card.createdAt || Date.now()
+    });
+  }
+  return items;
+}
+
+function normalizeMediaItem(item = {}) {
+  const url = String(item.url || item.src || "").trim();
+  if (!url) return null;
+  const type = item.type === "link" || item.kind === "link" ? "link" : "image";
+  return {
+    id: item.id || newId("media"),
+    type,
+    url,
+    label: item.label || (type === "link" ? "Drive/Reels" : "Imagem"),
+    createdAt: item.createdAt || Date.now()
+  };
+}
+
+function normalizeApprovalClient(client = {}, id = newId("client")) {
+  const normalized = {
+    ...client,
+    id,
+    name: client.name || "Cliente",
+    email: client.email || "",
+    color: client.color || colorFromString(client.name || id),
+    logoUrl: client.logoUrl || "",
+    groups: normalizeObjectCollection(client.groups)
+  };
+
+  const legacyCreatives = normalizeObjectCollection(client.creatives);
+  if (Object.keys(legacyCreatives).length) {
+    const legacyGroupId = "group_importado";
+    normalized.groups[legacyGroupId] ||= {
+      id: legacyGroupId,
+      name: "Semana 1",
+      createdAt: client.createdAt || Date.now(),
+      cards: {}
+    };
+    normalized.groups[legacyGroupId].cards = {
+      ...normalizeObjectCollection(normalized.groups[legacyGroupId].cards),
+      ...legacyCreatives
+    };
+  }
+
+  Object.entries(normalized.groups).forEach(([groupId, group]) => {
+    const cards = normalizeObjectCollection(group.cards);
+    Object.entries(cards).forEach(([cardId, card]) => {
+      const media = normalizeCreativeMedia(card);
+      const imageUrl = media.find((item) => item.type === "image")?.url || "";
+      const driveUrl = media.find((item) => item.type === "link")?.url || "";
+      cards[cardId] = {
+        id: card.id || cardId,
+        title: card.title || "Sem título",
+        caption: card.caption || "",
+        format: card.format || "Feed",
+        status: normalizeApprovalStatus(card.status),
+        media,
+        imageUrl,
+        driveUrl,
+        comments: asArray(card.comments),
+        revisionAlert: card.revisionAlert || "",
+        scheduledDate: card.scheduledDate || "",
+        scheduledTime: card.scheduledTime || "",
+        scheduleOrder: Number(card.scheduleOrder || 0),
+        internalApprovedAt: card.internalApprovedAt || null,
+        internalRejectedAt: card.internalRejectedAt || null,
+        sentToClientAt: card.sentToClientAt || null,
+        clientApprovedAt: card.clientApprovedAt || null,
+        clientRejectedAt: card.clientRejectedAt || null,
+        correctedAt: card.correctedAt || null,
+        postedAt: card.postedAt || null,
+        createdAt: card.createdAt || Date.now(),
+        updatedAt: card.updatedAt || card.createdAt || Date.now()
+      };
+    });
+    normalized.groups[groupId] = {
+      id: group.id || groupId,
+      name: group.name || "Grupo",
+      order: Number(group.order || 0),
+      createdAt: group.createdAt || Date.now(),
+      updatedAt: group.updatedAt || group.createdAt || Date.now(),
+      cards
+    };
+  });
+
+  normalized.creatives = {};
+  return normalized;
+}
+
+function seedData(user) {
+  const today = new Date();
+  const start = startOfWeek(today);
+  const userId = user?.uid || "person_owner";
+  const profiles = {
+    [userId]: {
+      id: userId,
+      name: user?.displayName || user?.email?.split("@")[0] || "Linniker",
+      role: "Owner",
+      color: "#3B82F6"
+    },
+    person_design: { id: "person_design", name: "Ana Design", role: "Designer", color: "#A78BFA" },
+    person_social: { id: "person_social", name: "Bruno Social", role: "Social media", color: "#34D399" }
+  };
+
+  const week = createWeek(start, profiles);
+  week.people[userId].mensal.push(seedDemand("Calendário editorial da semana", "Krio", "mensal", addDays(start, 1), 90));
+  week.people[userId].planejamento.push(seedDemand("Roteiro da campanha principal", "Krio", "planejamento", addDays(start, 2), 120));
+  week.people.person_design.avulso.push(seedDemand("Criativo para lançamento", "Cliente Alpha", "avulso", addDays(start, 3), 80));
+  week.people.person_social.aprovacao.push({ ...seedDemand("Enviar peças para aprovação", "Cliente Beta", "aprovacao", addDays(start, 4), 45), done: true, completedAt: Date.now() - 86400000, timeMinutes: 38 });
+
+  return {
+    meta: {
+      name: "Workspace Krio",
+      plan: "manual_license",
+      licenseStatus: "active",
+      licenseType: "direct_sale",
+      billingStatus: "manual_license"
+    },
+    billing: {
+      status: "manual_license",
+      provider: "manual"
+    },
+    profiles,
+    tracker: { weeks: [week], events: [], trash: [] },
+    approval: {
+      clients: {
+        client_alpha: {
+          id: "client_alpha",
+          name: "Cliente Alpha",
+          color: "#3B82F6",
+          email: "cliente.alpha@exemplo.com",
+          groups: {
+            group_semana_1: {
+              id: "group_semana_1",
+              name: "Semana 1",
+              createdAt: Date.now() - 172800000,
+              cards: {
+                creative_1: {
+                  id: "creative_1",
+                  title: "Post de lançamento",
+                  format: "Feed",
+                  status: "prov",
+                  caption: "Legenda inicial para revisar com a equipe.",
+                  imageUrl: "",
+                  comments: [{ id: "comment_1", author: "Krio", text: "Aguardando retorno do cliente.", createdAt: Date.now() - 7200000 }],
+                  createdAt: Date.now() - 7200000,
+                  updatedAt: Date.now()
+                }
+              }
+            }
+          }
+        },
+        client_beta: {
+          id: "client_beta",
+          name: "Cliente Beta",
+          color: "#34D399",
+          email: "cliente.beta@exemplo.com",
+          groups: {
+            group_semana_1: {
+              id: "group_semana_1",
+              name: "Semana 1",
+              createdAt: Date.now() - 86400000,
+              cards: {
+                creative_2: {
+                  id: "creative_2",
+                  title: "Story promocional",
+                  format: "Story",
+                  status: "internalApproved",
+                  imageUrl: "",
+                  comments: [],
+                  createdAt: Date.now() - 86400000,
+                  updatedAt: Date.now() - 86400000
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  };
+}
+
+function seedDemand(title, client, type, dueDate, estimateMinutes) {
+  return {
+    id: newId("dem"),
+    title,
+    client,
+    type,
+    dueDate: isoDate(dueDate),
+    estimateMinutes,
+    difficulty: "some",
+    notes: "",
+    done: false,
+    timeMinutes: 0,
+    runningStartedAt: null,
+    createdAt: Date.now(),
+    completedAt: null
+  };
+}
+
+function createWeek(start, profiles = state.data?.profiles || {}) {
+  const week = {
+    id: newId("week"),
+    title: weekRangeLabel(start),
+    startDate: isoDate(start),
+    endDate: isoDate(addDays(start, 6)),
+    people: {}
+  };
+  Object.keys(profiles).forEach((personId) => ensureWeekPerson(week, personId));
+  return week;
+}
+
+function ensureWeekPerson(week, personId) {
+  week.people ||= {};
+  week.people[personId] ||= {};
+  demandTypes.forEach((type) => {
+    week.people[personId][type.id] ||= [];
+  });
+  return week.people[personId];
+}
+
+function currentWeek() {
+  if (!state.data.tracker.weeks.length) {
+    state.data.tracker.weeks.push(createWeek(startOfWeek(new Date()), state.data.profiles));
+  }
+
+  const today = isoDate(new Date());
+  const index = state.data.tracker.weeks.findIndex((week) => week.startDate <= today && week.endDate >= today);
+  if (state.currentWeekIndex >= state.data.tracker.weeks.length) state.currentWeekIndex = state.data.tracker.weeks.length - 1;
+  if (state.currentWeekIndex < 0) state.currentWeekIndex = Math.max(0, index);
+  return state.data.tracker.weeks[state.currentWeekIndex] || state.data.tracker.weeks[0];
+}
+
+function getWeekDemandRefs(week) {
+  return Object.entries(week.people || {}).flatMap(([personId, groups]) => {
+    const person = getProfile(personId) || { id: personId, name: "Pessoa", color: "#3B82F6" };
+    return demandTypes.flatMap((type) => asArray(groups[type.id]).map((demand) => ({ week, person, personId, type: type.id, demand })));
+  });
+}
+
+function getVisibleWeekDemandRefs(week) {
+  return getWeekDemandRefs(week).filter(({ personId }) => canViewPerson(personId));
+}
+
+function getAllDemandRefs() {
+  return state.data.tracker.weeks.flatMap((week) => getWeekDemandRefs(week));
+}
+
+function getVisibleDemandRefs() {
+  return state.data.tracker.weeks.flatMap((week) => getVisibleWeekDemandRefs(week));
+}
+
+function findDemand(id) {
+  return getAllDemandRefs().find(({ demand }) => demand.id === id);
+}
+
+function removeDemandFromWeek(week, personId, type, id) {
+  const list = week.people?.[personId]?.[type] || [];
+  const index = list.findIndex((demand) => demand.id === id);
+  if (index >= 0) list.splice(index, 1);
+}
+
+function getProfiles() {
+  return Object.values(state.data.profiles || {}).sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
+}
+
+function getProfile(id) {
+  return state.data.profiles?.[id] || null;
+}
+
+function getClients() {
+  return Object.values(state.data.approval.clients || {}).sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
+}
+
+function getClient(id) {
+  return state.data.approval.clients?.[id] || null;
+}
+
+function getApprovalGroups(client) {
+  return Object.values(client?.groups || {}).sort((a, b) => {
+    const order = Number(a.order || 0) - Number(b.order || 0);
+    if (order !== 0) return order;
+    return (a.createdAt || 0) - (b.createdAt || 0);
+  });
+}
+
+function getGroupCards(group) {
+  return Object.values(group?.cards || {}).map((creative) => ({
+    ...creative,
+    groupId: group.id,
+    groupName: group.name,
+    status: normalizeApprovalStatus(creative.status)
+  })).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+}
+
+function getCreativeMedia(creative = {}) {
+  return normalizeCreativeMedia(creative);
+}
+
+function getCreativeImages(creative = {}) {
+  return getCreativeMedia(creative).filter((item) => item.type === "image");
+}
+
+function getCreativeLinks(creative = {}) {
+  return getCreativeMedia(creative).filter((item) => item.type === "link");
+}
+
+function renderCreativeCover(creative) {
+  const media = getCreativeMedia(creative);
+  const images = media.filter((item) => item.type === "image");
+  const links = media.filter((item) => item.type === "link");
+  const firstImage = images[0];
+  const badge = media.length > 1
+    ? `<span class="approval-media-count">${media.length} anexos</span>`
+    : links.length
+      ? `<span class="approval-media-count">link</span>`
+      : "";
+
+  if (firstImage) {
+    return `
+      <div class="approval-media-cover">
+        <img src="${attr(firstImage.url)}" alt="${attr(creative.title || "Criativo")}">
+        ${badge}
+      </div>`;
+  }
+
+  if (links.length) {
+    return `
+      <div class="approval-creative-ph approval-link-cover">
+        ${icons.send}
+        <span>Drive/Reels</span>
+        <small>${esc(domainFromUrl(links[0].url))}</small>
+        ${badge}
+      </div>`;
+  }
+
+  return `<div class="approval-creative-ph">Sem imagem</div>`;
+}
+
+function renderCreativeMediaDetail(creative) {
+  const images = getCreativeImages(creative);
+  const links = getCreativeLinks(creative);
+  if (!images.length && !links.length) return `<div class="approval-detail-ph">Sem imagem</div>`;
+
+  return `
+    <section class="approval-media-detail" aria-label="Midias anexadas">
+      ${images.length ? `
+        <div class="approval-media-grid ${images.length === 1 ? "single" : ""}">
+          ${images.map((item, index) => `
+            <button class="approval-image-button" type="button" data-action="openLightbox" data-src="${attr(item.url)}" aria-label="Abrir imagem ${index + 1}">
+              <img src="${attr(item.url)}" alt="${attr(creative.title || `Imagem ${index + 1}`)}">
+            </button>`).join("")}
+        </div>` : ""}
+      ${links.length ? `
+        <div class="approval-link-list">
+          ${links.map((item) => `
+            <a class="approval-media-link-card" href="${attr(item.url)}" target="_blank" rel="noopener noreferrer">
+              ${icons.send}
+              <span>${esc(item.label || "Drive/Reels")}</span>
+              <small>${esc(domainFromUrl(item.url))}</small>
+            </a>`).join("")}
+        </div>` : ""}
+    </section>`;
+}
+
+function renderCreativeMediaPreview(media = []) {
+  const items = asArray(media).map((item) => normalizeMediaItem(item)).filter(Boolean);
+  if (!items.length) return `<span>Arraste imagens aqui</span>`;
+  return `
+    <div class="approval-upload-preview-grid">
+      ${items.map((item) => item.type === "image"
+        ? `<img src="${attr(item.url)}" alt="${attr(item.label || "Imagem")}">`
+        : `<span class="approval-preview-link">${icons.send}<strong>${esc(item.label || "Drive/Reels")}</strong><small>${esc(domainFromUrl(item.url))}</small></span>`
+      ).join("")}
+    </div>`;
+}
+
+function domainFromUrl(url = "") {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "") || "Link anexado";
+  } catch (error) {
+    return "Link anexado";
+  }
+}
+
+function getCreatives(client) {
+  return getApprovalGroups(client)
+    .flatMap((group) => getGroupCards(group))
+    .sort((a, b) => (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0));
+}
+
+function getCreative(id) {
+  return findCreative(id)?.creative || null;
+}
+
+function findCreative(id, client = getClient(state.approvalClientId)) {
+  if (!id || !client) return null;
+  for (const group of getApprovalGroups(client)) {
+    const creative = group.cards?.[id];
+    if (creative) return { client, group, groupId: group.id, creative };
+  }
+  return null;
+}
+
+function countCreativesByStatus(creatives) {
+  return creatives.reduce((acc, creative) => {
+    const status = normalizeApprovalStatus(creative.status);
+    acc[status] = (acc[status] || 0) + 1;
+    return acc;
+  }, { prov: 0, internalApproved: 0, internalRejected: 0, clientReview: 0, scheduled: 0, posted: 0 });
+}
+
+function syncPostedCreatives() {
+  const now = Date.now();
+  let changed = false;
+
+  getClients().forEach((client) => {
+    getApprovalGroups(client).forEach((group) => {
+      Object.values(group.cards || {}).forEach((creative) => {
+        if (normalizeApprovalStatus(creative.status) !== "scheduled") return;
+        if (!shouldAutoPostCreative(creative, now)) return;
+        creative.status = "posted";
+        creative.postedAt = creative.postedAt || Date.now();
+        creative.updatedAt = Date.now();
+        changed = true;
+      });
+    });
+  });
+
+  if (changed) persist();
+  return changed;
+}
+
+function scheduleSortKey(creative) {
+  const date = creative.scheduledDate || "9999-12-31";
+  const time = creative.scheduledTime || "23:59";
+  return `${date}T${time}`;
+}
+
+function shouldAutoPostCreative(creative, now = Date.now()) {
+  const scheduledAt = scheduledPublishTime(creative);
+  return Number.isFinite(scheduledAt) && scheduledAt <= now;
+}
+
+function scheduledPublishTime(creative) {
+  if (!creative?.scheduledDate) return NaN;
+  const [year, month, day] = String(creative.scheduledDate).split("-").map(Number);
+  if (!year || !month || !day) return NaN;
+  const [hour = 23, minute = 59] = String(creative.scheduledTime || "23:59").split(":").map(Number);
+  return new Date(year, month - 1, day, Number(hour || 0), Number(minute || 0), 0, 0).getTime();
+}
+
+function getWeekStats(week, refs = getWeekDemandRefs(week)) {
+  const total = refs.length;
+  const done = refs.filter(({ demand }) => demand.done).length;
+  const pending = total - done;
+  const minutes = refs.reduce((sum, { demand }) => sum + effectiveMinutes(demand), 0);
+  const overdue = refs.filter(({ demand }) => isOverdue(demand)).length;
+  return {
+    total,
+    done,
+    pending,
+    minutes,
+    overdue,
+    progress: percent(done, total)
+  };
+}
+
+function getPersonStats(personWeek) {
+  const all = demandTypes.flatMap((type) => asArray(personWeek[type.id]));
+  const done = all.filter((demand) => demand.done).length;
+  return { total: all.length, done, progress: percent(done, all.length) };
+}
+
+function statCard(value, label) {
+  return `<div class="tracker-stat-card"><strong>${esc(value)}</strong><span>${esc(label)}</span></div>`;
+}
+
+function trackerSectionHead(title, subtitle, action = "") {
+  return `
+    <div class="tracker-section-head">
+      <div><h3>${esc(title)}</h3><p>${esc(subtitle)}</p></div>
+      ${action || ""}
+    </div>`;
+}
+
+function effectiveMinutes(demand) {
+  const base = Number(demand.timeMinutes || 0);
+  if (!demand.runningStartedAt) return base;
+  return base + Math.max(1, Math.floor((Date.now() - demand.runningStartedAt) / 60000));
+}
+
+function effectiveSeconds(demand) {
+  const base = Number(demand.timeMinutes || 0) * 60;
+  if (!demand.runningStartedAt) return base;
+  return base + Math.max(0, Math.floor((Date.now() - demand.runningStartedAt) / 1000));
+}
+
+function isOverdue(demand) {
+  return Boolean(demand.dueDate && !demand.done && demand.dueDate < isoDate(new Date()));
+}
+
+function percent(value, total) {
+  if (!total) return 0;
+  return Math.round((Number(value || 0) / Number(total)) * 100);
+}
+
+function formatDuration(minutes) {
+  const total = Number(minutes || 0);
+  if (total < 60) return `${total}m`;
+  const hours = Math.floor(total / 60);
+  const mins = total % 60;
+  return mins ? `${hours}h ${mins}m` : `${hours}h`;
+}
+
+function parseDurationToMinutes(value) {
+  const text = String(value || "").toLowerCase().replace(",", ".").trim();
+  if (!text) return 0;
+  const clock = text.match(/^(\d+):(\d{1,2})$/);
+  if (clock) return Math.max(0, (Number(clock[1]) * 60) + Number(clock[2]));
+  const hourMinute = text.match(/(\d+(?:\.\d+)?)\s*h(?:\s*(\d+)\s*m?)?/);
+  if (hourMinute) {
+    return Math.max(0, Math.round((Number(hourMinute[1]) * 60) + Number(hourMinute[2] || 0)));
+  }
+  const hours = text.match(/(\d+(?:\.\d+)?)\s*h/);
+  const minutes = text.match(/(\d+)\s*(m|min)/);
+  if (hours || minutes) {
+    return Math.max(0, Math.round((Number(hours?.[1] || 0) * 60) + Number(minutes?.[1] || 0)));
+  }
+  const numeric = Number(text.replace(/[^\d.]/g, ""));
+  return Math.max(0, Math.round(Number.isFinite(numeric) ? numeric : 0));
+}
+
+function formatClock(seconds) {
+  const total = Math.max(0, Number(seconds || 0));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const secs = total % 60;
+  if (hours) return `${hours}:${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+  return `${minutes}:${String(secs).padStart(2, "0")}`;
+}
+
+function formatDate(value) {
+  if (!value) return "Sem prazo";
+  const date = parseISODate(value);
+  const months = ["jan.", "fev.", "mar.", "abr.", "mai.", "jun.", "jul.", "ago.", "set.", "out.", "nov.", "dez."];
+  return `${String(date.getDate()).padStart(2, "0")} de ${months[date.getMonth()]}`;
+}
+
+function formatDateTime(value) {
+  if (!value) return "Sem registro";
+  const date = new Date(value);
+  const months = ["jan.", "fev.", "mar.", "abr.", "mai.", "jun.", "jul.", "ago.", "set.", "out.", "nov.", "dez."];
+  return `${String(date.getDate()).padStart(2, "0")} de ${months[date.getMonth()]}, ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
+function fileToDataUrl(file, options = {}) {
+  if (!file) return Promise.resolve("");
+  const maxSide = Number(options.maxSide || 1600);
+  const quality = Number(options.quality || 0.84);
+  const outputType = options.outputType || "";
+  const background = options.background || "";
+
+  const readRaw = () => new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => resolve("");
+    reader.readAsDataURL(file);
+  });
+
+  if (!file.type?.startsWith("image/")) return readRaw();
+
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const image = new Image();
+      image.onload = () => {
+        const scale = Math.min(1, maxSide / Math.max(image.width, image.height));
+        const width = Math.max(1, Math.round(image.width * scale));
+        const height = Math.max(1, Math.round(image.height * scale));
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          resolve(String(reader.result || ""));
+          return;
+        }
+        if (background) {
+          ctx.fillStyle = background;
+          ctx.fillRect(0, 0, width, height);
+        }
+        ctx.drawImage(image, 0, 0, width, height);
+        const type = outputType || (file.type === "image/png" || file.type === "image/webp" ? file.type : "image/jpeg");
+        resolve(canvas.toDataURL(type, quality));
+      };
+      image.onerror = () => resolve(String(reader.result || ""));
+      image.src = String(reader.result || "");
+    };
+    reader.onerror = () => resolve("");
+    reader.readAsDataURL(file);
+  });
+}
+
+function formatMonth(date) {
+  const months = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
+  return `${months[date.getMonth()]} de ${date.getFullYear()}`;
+}
+
+function formatWeekday(date) {
+  return ["dom.", "seg.", "ter.", "qua.", "qui.", "sex.", "sáb."][date.getDay()];
+}
+
+function weekRangeLabel(start) {
+  return `${formatDate(isoDate(start))} - ${formatDate(isoDate(addDays(start, 6)))}`;
+}
+
+function parseISODate(value) {
+  if (value instanceof Date) return new Date(value.getFullYear(), value.getMonth(), value.getDate());
+  const [year, month, day] = String(value || isoDate(new Date())).split("-").map(Number);
+  return new Date(year, (month || 1) - 1, day || 1);
+}
+
+function isoDate(date) {
+  const local = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const year = local.getFullYear();
+  const month = String(local.getMonth() + 1).padStart(2, "0");
+  const day = String(local.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function startOfWeek(date) {
+  const d = parseISODate(isoDate(date));
+  const day = (d.getDay() + 6) % 7;
+  d.setDate(d.getDate() - day);
+  return d;
+}
+
+function addDays(date, days) {
+  const next = parseISODate(isoDate(date));
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+function asArray(value) {
+  if (Array.isArray(value)) return value.filter(Boolean);
+  if (value && typeof value === "object") return Object.values(value).filter(Boolean);
+  return [];
+}
+
+function saveLocalState() {
+  try {
+    localStorage.setItem(storageKey(), JSON.stringify(state.data));
+    return true;
+  } catch (error) {
+    setSyncState("offline", "Copia local cheia. O Firebase continua sendo sincronizado quando disponivel.");
+    return false;
+  }
+}
+
+function loadLocalState() {
+  try {
+    return JSON.parse(localStorage.getItem(storageKey()) || "");
+  } catch (error) {
+    return null;
+  }
+}
+
+function storageKey() {
+  return `krio-state:${state.tenantId || state.user?.uid || "demo"}`;
+}
+
+function newId(prefix = "id") {
+  const body = crypto.randomUUID
+    ? crypto.randomUUID().replace(/-/g, "").slice(0, 18)
+    : `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+  return prefix ? `${prefix}_${body}` : body;
+}
+
+function slugify(text = "") {
+  return text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim()
+    .replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 48) || "workspace";
+}
+
+function colorFromString(text = "") {
+  const colors = ["#3B82F6", "#34D399", "#A78BFA", "#FBBF24", "#F87171", "#60A5FA"];
+  const index = String(text).split("").reduce((sum, char) => sum + char.charCodeAt(0), 0) % colors.length;
+  return colors[index];
+}
+
+function initials(name = "K") {
+  return esc(String(name).trim().split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "K");
+}
+
+function difficultyLabel(value) {
+  return { none: "Sem dificuldade", some: "Leve", hard: "Alta" }[value] || "Leve";
+}
+
+function esc(value = "") {
+  return String(value ?? "").replace(/[&<>"']/g, (char) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;"
+  })[char]);
+}
+
+function attr(value = "") {
+  return esc(value).replace(/`/g, "&#96;");
+}

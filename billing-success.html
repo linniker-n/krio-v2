@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Krio - acesso registrado</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="./tokens.css" />
+  <style>
+    body { min-height: 100dvh; display: grid; place-items: center; padding: 24px; }
+    .status-card { width: min(440px, 100%); border: 1px solid var(--line); border-radius: var(--r-2xl); background: var(--page-2); box-shadow: var(--shadow-lg); padding: 28px; display: grid; gap: 12px; }
+    .mark { width: 42px; height: 42px; border-radius: var(--r-lg); background: var(--green); color: #07120d; display: grid; place-items: center; font-weight: 800; }
+    h1 { margin: 0; font-size: 24px; letter-spacing: -0.04em; }
+    p { margin: 0; color: var(--muted); line-height: 1.55; }
+    a { height: 40px; border-radius: var(--r-lg); background: var(--brand); color: #fff; display: inline-flex; align-items: center; justify-content: center; text-decoration: none; font-weight: 700; margin-top: 10px; }
+  </style>
+</head>
+<body>
+  <main class="status-card">
+    <div class="mark">✓</div>
+    <h1>Solicitação registrada</h1>
+    <p>O Krio está configurado para venda manual. Depois do fechamento comercial, o acesso é liberado diretamente no Firebase.</p>
+    <a href="./index.html">Voltar ao acesso</a>
+  </main>
+</body>
+</html>

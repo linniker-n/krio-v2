@@ -1,0 +1,24 @@
+{
+  "name": "krio-v2",
+  "version": "1.0.0",
+  "private": true,
+  "description": "KRIO V2 - plataforma licenciada manualmente para agencias criativas.",
+  "scripts": {
+    "serve": "firebase emulators:start --only hosting,database",
+    "serve:static": "py -3 -m http.server 8000 --bind 127.0.0.1",
+    "check": "node --check scripts/app-shell.js && node -e \"JSON.parse(require('fs').readFileSync('database.rules.json','utf8')); JSON.parse(require('fs').readFileSync('firebase.json','utf8'));\"",
+    "smoke": "node scripts/smoke-test.mjs",
+    "preflight": "powershell -ExecutionPolicy Bypass -File scripts/preflight.ps1",
+    "release": "powershell -ExecutionPolicy Bypass -File scripts/release.ps1",
+    "access:list": "powershell -ExecutionPolicy Bypass -File scripts/list-access-requests.ps1",
+    "access:grant": "powershell -ExecutionPolicy Bypass -File scripts/grant-client-access.ps1",
+    "access:revoke": "powershell -ExecutionPolicy Bypass -File scripts/revoke-client-access.ps1",
+    "deploy": "firebase deploy",
+    "deploy:hosting": "firebase deploy --only hosting",
+    "deploy:rules": "firebase deploy --only database"
+  },
+  "devDependencies": {
+    "firebase-tools": "^15.15.0",
+    "playwright": "^1.59.1"
+  }
+}

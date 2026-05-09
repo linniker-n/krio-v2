@@ -1,0 +1,16 @@
+.env
+.env.*
+!.env.example
+functions/.env
+functions/.env.*
+!functions/.env.example
+node_modules/
+functions/node_modules/
+firebase-debug.log
+firebase-debug.*.log
+server.*.log
+.firebase/
+test-results/
+playwright-report/
+*.local
+*.zip

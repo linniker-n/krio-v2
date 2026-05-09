@@ -1,0 +1,949 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Popp — Dashboard de Planejamento</title>
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;500;600;700;800;900&family=Inter:wght@300;400;500;600&family=Dancing+Script:wght@600;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --roxo: #6B21A8;
+  --roxo-medio: #7C3AED;
+  --roxo-claro: #A855F7;
+  --roxo-ultra: #D8B4FE;
+  --prata: #CBD5E1;
+  --prata-escuro: #94A3B8;
+  --branco: #FFFFFF;
+  --fundo: #0D0B14;
+  --fundo2: #13101E;
+  --fundo3: #1A1628;
+  --card: rgba(255,255,255,0.04);
+  --card-hover: rgba(255,255,255,0.07);
+  --borda: rgba(168,85,247,0.2);
+  --borda-prata: rgba(203,213,225,0.12);
+  --verde: #34D399;
+  --amarelo: #FCD34D;
+  --vermelho: #F87171;
+  --azul: #818CF8;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+
+body {
+  font-family: 'Inter', sans-serif;
+  background: var(--fundo);
+  color: var(--branco);
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
+  pointer-events: none;
+  z-index: 1000;
+}
+
+.bg-blob { position: fixed; border-radius: 50%; filter: blur(120px); pointer-events: none; z-index: 0; animation: blobFloat 10s ease-in-out infinite alternate; }
+.bg-blob-1 { width: 500px; height: 500px; background: rgba(107,33,168,0.18); top: -150px; left: -150px; }
+.bg-blob-2 { width: 400px; height: 400px; background: rgba(124,58,237,0.12); bottom: -100px; right: -100px; animation-delay: 3s; }
+@keyframes blobFloat { from { transform: translate(0,0) scale(1); } to { transform: translate(20px,15px) scale(1.04); } }
+
+.app { position: relative; z-index: 1; }
+
+/* ── TOPBAR ── */
+.topbar {
+  position: sticky; top: 0; z-index: 100;
+  background: rgba(13,11,20,0.85);
+  backdrop-filter: blur(20px);
+  border-bottom: 1px solid var(--borda);
+  padding: 0 40px; height: 64px;
+  display: flex; align-items: center; justify-content: space-between; gap: 20px;
+}
+.topbar-brand { display: flex; align-items: center; gap: 12px; }
+.topbar-logo { font-family: 'Dancing Script', cursive; font-size: 22px; background: linear-gradient(135deg, var(--roxo-claro), var(--prata)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+.topbar-sep { width: 1px; height: 20px; background: var(--borda); }
+.topbar-title { font-family: 'Montserrat', sans-serif; font-size: 13px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--prata-escuro); }
+.topbar-right { display: flex; align-items: center; gap: 16px; }
+
+/* ── SYNC DOT ── */
+.sync-indicator { display: flex; align-items: center; gap: 8px; }
+.sync-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--prata-escuro); transition: all 0.3s; }
+.sync-dot.online { background: var(--verde); box-shadow: 0 0 6px var(--verde); animation: pulse 2s ease-in-out infinite; }
+.sync-dot.syncing { background: var(--amarelo); box-shadow: 0 0 6px var(--amarelo); }
+.sync-dot.error { background: var(--vermelho); box-shadow: 0 0 6px var(--vermelho); }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
+.sync-txt { font-size: 11px; color: var(--prata-escuro); font-family: 'Montserrat', sans-serif; font-weight: 600; letter-spacing: 0.06em; }
+
+.live-badge { display: flex; align-items: center; gap: 6px; background: rgba(52,211,153,0.1); border: 1px solid rgba(52,211,153,0.25); border-radius: 100px; padding: 5px 12px; font-family: 'Montserrat', sans-serif; font-size: 10px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--verde); }
+.live-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--verde); animation: pulse 1.5s ease-in-out infinite; }
+
+/* ── SETUP SCREEN ── */
+.setup-screen {
+  display: flex; align-items: center; justify-content: center;
+  min-height: calc(100vh - 64px); padding: 40px;
+}
+.setup-card {
+  background: var(--fundo2); border: 1px solid var(--borda);
+  border-radius: 24px; padding: 40px; width: 100%; max-width: 480px;
+}
+.setup-icon { font-size: 40px; margin-bottom: 16px; }
+.setup-title { font-family: 'Montserrat', sans-serif; font-size: 22px; font-weight: 900; margin-bottom: 6px; }
+.setup-sub { font-size: 13px; color: var(--prata-escuro); margin-bottom: 28px; line-height: 1.6; }
+.form-group { margin-bottom: 16px; }
+.form-label { display: block; font-family: 'Montserrat', sans-serif; font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--prata-escuro); margin-bottom: 7px; }
+.form-input { width: 100%; background: rgba(255,255,255,0.04); border: 1px solid var(--borda-prata); border-radius: 10px; padding: 10px 14px; color: var(--branco); font-family: 'Inter', sans-serif; font-size: 13px; transition: border-color 0.2s; outline: none; }
+.form-input:focus { border-color: var(--roxo-claro); }
+.setup-btn { width: 100%; background: linear-gradient(135deg, var(--roxo), var(--roxo-claro)); color: white; border: none; border-radius: 10px; padding: 12px; font-family: 'Montserrat', sans-serif; font-size: 13px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; cursor: pointer; transition: all 0.2s; margin-top: 8px; }
+.setup-btn:hover { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(168,85,247,0.4); }
+.setup-hint { font-size: 11px; color: var(--prata-escuro); margin-top: 12px; text-align: center; line-height: 1.5; }
+.setup-error { background: rgba(248,113,113,0.1); border: 1px solid rgba(248,113,113,0.3); border-radius: 8px; padding: 10px 14px; font-size: 12px; color: var(--vermelho); margin-top: 12px; display: none; }
+
+/* ── MAIN ── */
+.main { padding: 32px 40px; max-width: 1400px; margin: 0 auto; }
+
+/* ── PAGE HEADER ── */
+.page-header { display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 28px; flex-wrap: wrap; gap: 16px; }
+.week-badge { font-family: 'Dancing Script', cursive; font-size: 15px; color: var(--roxo-claro); margin-bottom: 4px; }
+.page-heading { font-family: 'Montserrat', sans-serif; font-size: 26px; font-weight: 900; letter-spacing: -0.02em; }
+.page-heading span { background: linear-gradient(135deg, var(--roxo-claro), var(--prata)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+.updated-at { font-size: 11px; color: var(--prata-escuro); }
+
+/* ── KPI STRIP ── */
+.kpi-strip { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 28px; }
+.kpi-card { background: var(--card); border: 1px solid var(--borda); border-radius: 14px; padding: 18px 20px; text-align: center; position: relative; overflow: hidden; transition: border-color 0.2s; }
+.kpi-card::before { content: ''; position: absolute; inset: 0; opacity: 0; transition: opacity 0.3s; }
+.kpi-card.kpi-done { border-color: rgba(52,211,153,0.3); }
+.kpi-card.kpi-done::before { background: radial-gradient(ellipse at top, rgba(52,211,153,0.06), transparent); opacity: 1; }
+.kpi-card.kpi-pending { border-color: rgba(251,191,36,0.25); }
+.kpi-card.kpi-pending::before { background: radial-gradient(ellipse at top, rgba(251,191,36,0.05), transparent); opacity: 1; }
+.kpi-val { font-family: 'Montserrat', sans-serif; font-size: 32px; font-weight: 900; line-height: 1; margin-bottom: 4px; }
+.kpi-val.verde { color: var(--verde); }
+.kpi-val.amarelo { color: var(--amarelo); }
+.kpi-val.azul { color: var(--azul); }
+.kpi-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--prata-escuro); }
+
+/* ── PROGRESS BAR GLOBAL ── */
+.global-progress-wrap { background: var(--card); border: 1px solid var(--borda); border-radius: 14px; padding: 20px 24px; margin-bottom: 28px; }
+.gp-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.gp-title { font-family: 'Montserrat', sans-serif; font-size: 12px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--prata-escuro); }
+.gp-pct { font-family: 'Montserrat', sans-serif; font-size: 18px; font-weight: 900; color: var(--verde); }
+.gp-track { height: 8px; background: rgba(255,255,255,0.07); border-radius: 4px; overflow: hidden; }
+.gp-fill { height: 100%; border-radius: 4px; background: linear-gradient(90deg, #6B21A8, #34D399); transition: width 0.8s cubic-bezier(.4,0,.2,1); }
+
+/* ── 2 COL LAYOUT ── */
+.two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px; }
+.three-col { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-bottom: 20px; }
+
+/* ── SECTION CARD ── */
+.section-card { background: var(--card); border: 1px solid var(--borda); border-radius: 16px; overflow: hidden; }
+.section-head { padding: 16px 20px; border-bottom: 1px solid rgba(255,255,255,0.05); display: flex; align-items: center; justify-content: space-between; }
+.section-title { font-family: 'Montserrat', sans-serif; font-size: 11px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--prata-escuro); }
+.section-badge { font-family: 'Montserrat', sans-serif; font-size: 11px; font-weight: 800; }
+.section-body { padding: 16px 20px; }
+
+/* ── PERSON PROGRESS CARDS ── */
+.person-progress-card { display: flex; align-items: center; gap: 14px; padding: 14px 0; border-bottom: 1px solid rgba(255,255,255,0.04); }
+.person-progress-card:last-child { border-bottom: none; }
+.pp-avatar { width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-family: 'Montserrat', sans-serif; font-weight: 900; font-size: 14px; flex-shrink: 0; }
+.pp-info { flex: 1; min-width: 0; }
+.pp-name { font-family: 'Montserrat', sans-serif; font-size: 13px; font-weight: 700; margin-bottom: 5px; }
+.pp-track { height: 5px; background: rgba(255,255,255,0.07); border-radius: 3px; overflow: hidden; margin-bottom: 3px; }
+.pp-fill { height: 100%; border-radius: 3px; transition: width 0.8s cubic-bezier(.4,0,.2,1); }
+.pp-counts { font-size: 10px; color: var(--prata-escuro); }
+.pp-pct { font-family: 'Montserrat', sans-serif; font-size: 14px; font-weight: 800; flex-shrink: 0; }
+
+/* ── DEMAND LIST ── */
+.demand-row { display: flex; align-items: flex-start; gap: 10px; padding: 10px 0; border-bottom: 1px solid rgba(255,255,255,0.04); }
+.demand-row:last-child { border-bottom: none; }
+.demand-status-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; margin-top: 5px; }
+.dot-done { background: var(--verde); }
+.dot-pending { background: rgba(255,255,255,0.15); border: 1.5px solid rgba(255,255,255,0.2); }
+.dot-running { background: var(--amarelo); animation: pulse 1.5s ease-in-out infinite; }
+.demand-row-body { flex: 1; min-width: 0; }
+.demand-row-desc { font-size: 12px; color: var(--prata); line-height: 1.4; margin-bottom: 3px; word-break: break-word; }
+.demand-row-desc.done-text { text-decoration: line-through; opacity: 0.5; }
+.demand-row-meta { display: flex; gap: 5px; flex-wrap: wrap; align-items: center; }
+.tag { font-size: 9px; font-weight: 600; padding: 2px 7px; border-radius: 100px; }
+.tag-client { background: rgba(168,85,247,0.12); color: var(--roxo-ultra); border: 1px solid rgba(168,85,247,0.2); }
+.tag-mensal { background: rgba(168,85,247,0.1); color: var(--roxo-ultra); border: 1px solid rgba(168,85,247,0.2); }
+.tag-avulso { background: rgba(251,191,36,0.08); color: var(--amarelo); border: 1px solid rgba(251,191,36,0.18); }
+.tag-aprovacao { background: rgba(96,165,250,0.1); color: #60A5FA; border: 1px solid rgba(96,165,250,0.2); }
+.tag-planejamento { background: rgba(244,114,182,0.1); color: #F472B6; border: 1px solid rgba(244,114,182,0.2); }
+.tag-time { background: rgba(52,211,153,0.08); color: var(--verde); border: 1px solid rgba(52,211,153,0.2); }
+.tag-person { font-size: 9px; font-weight: 700; padding: 2px 7px; border-radius: 100px; }
+
+/* ── DEMAND FULL LIST ── */
+.demand-full-section { margin-bottom: 28px; }
+.demand-full-section-title { font-family: 'Montserrat', sans-serif; font-size: 11px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--prata-escuro); margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+.demand-full-section-title .count { font-family: 'Montserrat', sans-serif; font-size: 11px; font-weight: 800; background: rgba(168,85,247,0.15); border: 1px solid rgba(168,85,247,0.25); border-radius: 100px; padding: 1px 8px; color: var(--roxo-ultra); }
+
+/* ── TYPE DISTRIBUTION ── */
+.type-dist { display: flex; flex-direction: column; gap: 10px; }
+.type-row { display: flex; align-items: center; gap: 10px; }
+.type-label { font-size: 11px; color: var(--prata); min-width: 80px; }
+.type-bar-track { flex: 1; height: 6px; background: rgba(255,255,255,0.06); border-radius: 3px; overflow: hidden; }
+.type-bar-fill { height: 100%; border-radius: 3px; transition: width 0.8s cubic-bezier(.4,0,.2,1); }
+.type-count { font-family: 'Montserrat', sans-serif; font-size: 11px; font-weight: 700; min-width: 24px; text-align: right; color: var(--prata-escuro); }
+
+/* ── TIMELINE / ACTIVITY ── */
+.activity-item { display: flex; gap: 12px; padding: 10px 0; border-bottom: 1px solid rgba(255,255,255,0.04); align-items: flex-start; }
+.activity-item:last-child { border-bottom: none; }
+.activity-icon { width: 26px; height: 26px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 900; flex-shrink: 0; margin-top: 1px; }
+.act-done { background: rgba(52,211,153,0.15); border: 1px solid rgba(52,211,153,0.3); color: var(--verde); }
+.act-added { background: rgba(168,85,247,0.15); border: 1px solid rgba(168,85,247,0.3); color: var(--roxo-claro); }
+.activity-text { flex: 1; font-size: 11.5px; color: var(--prata); line-height: 1.5; }
+.activity-time { font-size: 10px; color: var(--prata-escuro); margin-top: 2px; }
+
+/* ── EMPTY STATES ── */
+.empty-msg { text-align: center; padding: 28px 16px; color: var(--prata-escuro); font-size: 12px; }
+.empty-msg .ico { font-size: 28px; opacity: 0.3; margin-bottom: 8px; }
+
+/* ── PENDING DEMANDS LIST ── */
+.pending-section { margin-bottom: 24px; }
+.pending-section-person { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.pending-avatar { width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-family: 'Montserrat', sans-serif; font-weight: 900; font-size: 10px; flex-shrink: 0; }
+.pending-name { font-family: 'Montserrat', sans-serif; font-size: 12px; font-weight: 700; }
+.pending-count { font-size: 10px; color: var(--prata-escuro); margin-left: 2px; }
+
+/* ── FOOTER ── */
+.dash-footer { text-align: center; padding: 32px 40px; color: var(--prata-escuro); font-size: 11px; border-top: 1px solid rgba(255,255,255,0.04); }
+.dash-footer span { color: var(--roxo-claro); }
+
+/* ── LAST UPDATE ── */
+.last-update { font-size: 10px; color: var(--prata-escuro); font-family: 'Montserrat', sans-serif; letter-spacing: 0.04em; }
+
+/* ── LIVE SECTION ── */
+.live-section {
+  border: 1px solid rgba(52,211,153,0.3);
+  border-radius: 14px;
+  padding: 16px 20px;
+  margin-bottom: 20px;
+  background: rgba(52,211,153,0.04);
+  display: none;
+  position: relative;
+  overflow: hidden;
+  animation: liveSectionEntrance 0.4s ease;
+}
+@keyframes liveSectionEntrance {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.live-section::before {
+  content: '';
+  position: absolute;
+  top: 0; left: -100%;
+  width: 60%; height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(52,211,153,0.06), transparent);
+  animation: liveSweep 3s ease-in-out infinite;
+  pointer-events: none;
+}
+@keyframes liveSweep {
+  0%   { left: -60%; }
+  100% { left: 160%; }
+}
+.live-section-head {
+  display: flex; align-items: center; gap: 10px; margin-bottom: 14px;
+}
+.live-section-title {
+  font-family: 'Montserrat', sans-serif; font-size: 11px; font-weight: 700;
+  letter-spacing: 0.1em; text-transform: uppercase; color: var(--verde);
+}
+.live-dot-sm {
+  width: 8px; height: 8px; border-radius: 50%; background: var(--verde);
+  flex-shrink: 0; position: relative;
+}
+.live-dot-sm::after {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  background: rgba(52,211,153,0.3);
+  animation: sonar 1.6s ease-out infinite;
+}
+@keyframes sonar {
+  0%   { transform: scale(0.6); opacity: 0.9; }
+  100% { transform: scale(2.2); opacity: 0; }
+}
+.live-count-badge {
+  font-family: 'Montserrat', sans-serif; font-size: 10px; font-weight: 800;
+  background: rgba(52,211,153,0.15); border: 1px solid rgba(52,211,153,0.3);
+  border-radius: 100px; padding: 2px 9px; color: var(--verde);
+}
+.live-items-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px;
+}
+.live-item {
+  background: rgba(52,211,153,0.05); border: 1px solid rgba(52,211,153,0.2);
+  border-radius: 10px; padding: 12px 14px;
+  display: flex; flex-direction: column; gap: 6px;
+  animation: liveItemIn 0.35s ease both;
+}
+@keyframes liveItemIn {
+  from { opacity: 0; transform: scale(0.97); }
+  to   { opacity: 1; transform: scale(1); }
+}
+.live-item-person {
+  display: flex; align-items: center; gap: 8px;
+}
+.live-person-av {
+  width: 22px; height: 22px; border-radius: 50%; display: flex;
+  align-items: center; justify-content: center;
+  font-family: 'Montserrat', sans-serif; font-weight: 900; font-size: 9px;
+  color: white; flex-shrink: 0; overflow: hidden;
+}
+.live-person-name {
+  font-family: 'Montserrat', sans-serif; font-size: 11px; font-weight: 700;
+  color: var(--verde);
+}
+.live-item-desc {
+  font-size: 12px; color: var(--prata); line-height: 1.4;
+}
+.live-item-client {
+  font-family: 'Montserrat', sans-serif; font-size: 11px; font-weight: 700;
+  color: var(--roxo-ultra); margin-bottom: 1px;
+}
+.live-item-footer {
+  display: flex; align-items: center; justify-content: space-between; gap: 6px;
+}
+.live-timer {
+  font-family: 'Montserrat', sans-serif; font-size: 11px; font-weight: 700;
+  color: var(--verde); letter-spacing: 0.04em;
+  animation: timerBlink 2s ease-in-out infinite;
+}
+@keyframes timerBlink { 0%,100%{opacity:1} 50%{opacity:0.6} }
+.live-empty {
+  text-align: center; padding: 4px 0; font-size: 12px; color: var(--prata-escuro);
+}
+#appRoot { display: none; }
+#setupScreen { display: block; }
+
+@media (max-width: 900px) {
+  .topbar { padding: 0 20px; }
+  .main { padding: 20px; }
+  .kpi-strip { grid-template-columns: repeat(3, 1fr); }
+  .two-col, .three-col { grid-template-columns: 1fr; }
+}
+@media (max-width: 600px) {
+  .kpi-strip { grid-template-columns: repeat(2, 1fr); }
+}
+</style>
+</head>
+<body>
+<div class="bg-blob bg-blob-1"></div>
+<div class="bg-blob bg-blob-2"></div>
+<div class="app">
+
+  <!-- TOPBAR -->
+  <div class="topbar">
+    <div class="topbar-brand">
+      <div class="topbar-logo">Popp</div>
+      <div class="topbar-sep"></div>
+      <div class="topbar-title">Dashboard · Planejamento</div>
+    </div>
+    <div class="topbar-right">
+      <div class="live-badge" id="liveBadge" style="display:none">
+        <div class="live-dot"></div>
+        Ao vivo
+      </div>
+      <div class="sync-indicator">
+        <div class="sync-dot" id="syncDot"></div>
+        <div class="sync-txt" id="syncTxt">Conectando…</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SETUP SCREEN -->
+  <div id="setupScreen">
+    <div class="setup-screen">
+      <div class="setup-card">
+        <div class="setup-icon">📊</div>
+        <div class="setup-title">Dashboard de Planejamento</div>
+        <div class="setup-sub">
+          Conecte ao mesmo Firebase do Popp Tracker para visualizar a produção da equipe em tempo real.<br><br>
+          Use as mesmas credenciais configuradas no tracker.
+        </div>
+        <div class="form-group">
+          <label class="form-label">API Key</label>
+          <input class="form-input" id="cfg_apiKey" type="password" placeholder="AIza...">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Database URL</label>
+          <input class="form-input" id="cfg_dbUrl" placeholder="https://seu-projeto.firebaseio.com">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Project ID</label>
+          <input class="form-input" id="cfg_projectId" placeholder="seu-projeto-firebase">
+        </div>
+        <button class="setup-btn" onclick="connectFirebase()">Conectar ao Tracker</button>
+        <div class="setup-error" id="setupError"></div>
+        <div class="setup-hint">Estes dados ficam salvos apenas neste dispositivo.<br>Nenhuma alteração pode ser feita por aqui.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- APP -->
+  <div id="appRoot">
+    <div class="main">
+
+      <!-- HEADER -->
+      <div class="page-header">
+        <div>
+          <div class="week-badge">semana em andamento</div>
+          <div class="page-heading" id="weekTitle">Carregando… <span></span></div>
+        </div>
+        <div class="last-update">Última atualização: <span id="lastUpdateTime">—</span></div>
+      </div>
+
+      <!-- KPIs -->
+      <div class="kpi-strip">
+        <div class="kpi-card">
+          <div class="kpi-val" id="kpi-total">0</div>
+          <div class="kpi-label">Total de demandas</div>
+        </div>
+        <div class="kpi-card kpi-done">
+          <div class="kpi-val verde" id="kpi-done">0</div>
+          <div class="kpi-label">Concluídas</div>
+        </div>
+        <div class="kpi-card kpi-pending">
+          <div class="kpi-val amarelo" id="kpi-pending">0</div>
+          <div class="kpi-label">Em aberto</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-val azul" id="kpi-mensais">0</div>
+          <div class="kpi-label">Mensais</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-val" style="color:var(--amarelo)" id="kpi-avulsos">0</div>
+          <div class="kpi-label">Avulsos</div>
+        </div>
+      </div>
+
+      <!-- AO VIVO -->
+      <div class="live-section" id="liveSection">
+        <div class="live-section-head">
+          <div class="live-dot-sm"></div>
+          <div class="live-section-title">Em progresso agora</div>
+          <span class="live-count-badge" id="liveCount">0</span>
+        </div>
+        <div class="live-items-grid" id="liveGrid"></div>
+      </div>
+
+      <!-- PROGRESSO GERAL -->
+      <div class="global-progress-wrap">
+        <div class="gp-header">
+          <div class="gp-title">Progresso geral da semana</div>
+          <div class="gp-pct" id="gp-pct">0%</div>
+        </div>
+        <div class="gp-track">
+          <div class="gp-fill" id="gp-fill" style="width:0%"></div>
+        </div>
+      </div>
+
+      <!-- POR PESSOA + DISTRIBUIÇÃO -->
+      <div class="two-col">
+
+        <!-- Por pessoa -->
+        <div class="section-card">
+          <div class="section-head">
+            <div class="section-title">Progresso por pessoa</div>
+          </div>
+          <div class="section-body" id="personProgress">
+            <div class="empty-msg"><div class="ico">👥</div>Carregando…</div>
+          </div>
+        </div>
+
+        <!-- Distribuição por tipo + Dificuldade -->
+        <div style="display:flex;flex-direction:column;gap:20px;">
+
+          <div class="section-card">
+            <div class="section-head">
+              <div class="section-title">Distribuição por tipo</div>
+              <div class="section-badge" id="tipo-total" style="color:var(--prata-escuro)">0 demandas</div>
+            </div>
+            <div class="section-body">
+              <div class="type-dist" id="typeDist"></div>
+            </div>
+          </div>
+
+          <div class="section-card">
+            <div class="section-head">
+              <div class="section-title">Nível de dificuldade</div>
+              <div class="section-badge" id="diff-total" style="color:var(--prata-escuro)">só concluídas</div>
+            </div>
+            <div class="section-body">
+              <div class="type-dist" id="diffDist"></div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- DEMANDAS PENDENTES / CONCLUÍDAS POR PESSOA -->
+      <div class="two-col" style="margin-bottom:20px">
+
+        <div class="section-card">
+          <div class="section-head">
+            <div class="section-title">⏳ Pendentes</div>
+            <div class="section-badge" id="pending-count" style="color:var(--amarelo)">0</div>
+          </div>
+          <div class="section-body" id="pendingList" style="max-height:420px;overflow-y:auto">
+            <div class="empty-msg"><div class="ico">✅</div>Tudo concluído!</div>
+          </div>
+        </div>
+
+        <div class="section-card">
+          <div class="section-head">
+            <div class="section-title">✅ Concluídas</div>
+            <div class="section-badge" id="done-count" style="color:var(--verde)">0</div>
+          </div>
+          <div class="section-body" id="doneList" style="max-height:420px;overflow-y:auto">
+            <div class="empty-msg"><div class="ico">📋</div>Nenhuma ainda</div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- ATIVIDADE RECENTE -->
+      <div class="section-card" style="margin-bottom:20px">
+        <div class="section-head">
+          <div class="section-title">🕐 Atividade recente</div>
+          <div class="section-badge" id="activity-badge" style="color:var(--prata-escuro)">últimas 24h</div>
+        </div>
+        <div class="section-body" id="activityList" style="max-height:320px;overflow-y:auto">
+          <div class="empty-msg"><div class="ico">📭</div>Nenhuma atividade recente</div>
+        </div>
+      </div>
+
+      <!-- HISTÓRICO DE SEMANAS -->
+      <div class="section-card" style="margin-bottom:28px">
+        <div class="section-head">
+          <div class="section-title">📅 Semanas anteriores</div>
+          <div class="section-badge" id="history-badge" style="color:var(--prata-escuro)">—</div>
+        </div>
+        <div class="section-body" id="historyList">
+          <div class="empty-msg"><div class="ico">📅</div>Nenhuma semana anterior</div>
+        </div>
+      </div>
+
+    </div>
+
+    <div class="dash-footer">
+      Dashboard de planejamento — <span>Popp Tracker</span> · Somente leitura · Dados em tempo real via Firebase
+      <br><br>
+      <span style="font-size:10px;opacity:.5;cursor:pointer" onclick="resetConfig()">Redefinir configuração</span>
+    </div>
+  </div>
+
+</div>
+
+<script type="module">
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
+import { getDatabase, ref, onValue } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js';
+
+// ══════════════════════════════════════════════
+// CONNECT
+// ══════════════════════════════════════════════
+window.connectFirebase = function() {
+  const apiKey      = document.getElementById('cfg_apiKey').value.trim();
+  const databaseURL = document.getElementById('cfg_dbUrl').value.trim();
+  const projectId   = document.getElementById('cfg_projectId').value.trim();
+  const errEl       = document.getElementById('setupError');
+
+  if (!apiKey || !databaseURL || !projectId) {
+    errEl.style.display = 'block';
+    errEl.textContent   = 'Preencha todos os campos';
+    return;
+  }
+  if (!databaseURL.includes('firebaseio.com')) {
+    errEl.style.display = 'block';
+    errEl.textContent   = 'A Database URL deve terminar em .firebaseio.com';
+    return;
+  }
+  errEl.style.display = 'none';
+  const config = { apiKey, databaseURL, projectId };
+  localStorage.setItem('popp_firebase_config', JSON.stringify(config));
+  initDashboard(config);
+};
+
+window.resetConfig = function() {
+  if (!confirm('Redefinir configuração do Firebase?')) return;
+  localStorage.removeItem('popp_firebase_config');
+  location.reload();
+};
+
+function setSyncStatus(status, msg) {
+  const dot = document.getElementById('syncDot');
+  const txt = document.getElementById('syncTxt');
+  if (!dot || !txt) return;
+  dot.className = 'sync-dot ' + status;
+  txt.textContent = msg || status;
+}
+
+// ══════════════════════════════════════════════
+// HELPERS
+// ══════════════════════════════════════════════
+const STATIC_PEOPLE = [
+  { id: 'lin', name: 'Linniker', color: '#A855F7', gradFrom: '#6B21A8', gradTo: '#A855F7' },
+  { id: 'gui', name: 'Gui',      color: '#818CF8', gradFrom: '#4F46E5', gradTo: '#818CF8' },
+  { id: 'gio', name: 'Gio',      color: '#C084FC', gradFrom: '#9333EA', gradTo: '#C084FC' },
+];
+
+function getAllProfiles(state) {
+  const dynProfiles = state.dynamicProfiles || [];
+  const base = STATIC_PEOPLE.map(p => {
+    const dyn = dynProfiles.find(d => d.id === p.id);
+    return dyn ? { ...p, ...dyn } : p;
+  });
+  const extra = dynProfiles.filter(d => !STATIC_PEOPLE.find(p => p.id === d.id)).map(d => ({
+    id: d.id, name: d.name || d.id,
+    color: d.color || '#A855F7',
+    gradFrom: (d.color || '#A855F7') + '99',
+    gradTo: d.color || '#A855F7',
+  }));
+  return [...base, ...extra];
+}
+
+function getPersonName(id, state) {
+  const all = getAllProfiles(state);
+  return all.find(p => p.id === id)?.name || id;
+}
+
+function timeAgo(ts) {
+  if (!ts) return '';
+  const diff = Math.floor((Date.now() - new Date(ts).getTime()) / 1000);
+  if (diff < 60) return 'agora mesmo';
+  if (diff < 3600) return `${Math.floor(diff/60)} min atrás`;
+  if (diff < 86400) return `${Math.floor(diff/3600)}h atrás`;
+  return `${Math.floor(diff/86400)}d atrás`;
+}
+
+function avatar(prof) {
+  const bg = `linear-gradient(135deg,${prof.gradFrom||prof.color+'99'},${prof.gradTo||prof.color})`;
+  if (prof.photoUrl) {
+    return `<div class="pp-avatar" style="background:${bg};overflow:hidden">
+      <img src="${prof.photoUrl}" style="width:100%;height:100%;object-fit:cover;border-radius:50%" onerror="this.style.display='none'">
+    </div>`;
+  }
+  return `<div class="pp-avatar" style="background:${bg};color:white">${(prof.name||'?')[0].toUpperCase()}</div>`;
+}
+
+function smallAvatar(prof, size=24) {
+  const bg = `linear-gradient(135deg,${prof.gradFrom||prof.color+'99'},${prof.gradTo||prof.color})`;
+  return `<div class="pending-avatar" style="width:${size}px;height:${size}px;background:${bg};color:white;font-size:${Math.round(size*0.42)}px">${(prof.name||'?')[0].toUpperCase()}</div>`;
+}
+
+function typeBadge(type) {
+  const map = {
+    mensal: ['tag-mensal', '📅 Mensal'],
+    avulso: ['tag-avulso', '⚡ Avulso'],
+    aprovacao: ['tag-aprovacao', '☑️ Aprovação'],
+    planejamento: ['tag-planejamento', '📝 Planejamento'],
+  };
+  const [cls, label] = map[type] || ['tag-mensal', type];
+  return `<span class="tag ${cls}">${label}</span>`;
+}
+
+// ══════════════════════════════════════════════
+// RENDER
+// ══════════════════════════════════════════════
+function render(state) {
+  if (!state || !state.weeks) return;
+
+  const profiles = getAllProfiles(state);
+  const currentWeek = state.weeks[0]; // semana mais recente sempre no índice 0
+  const allWeeks    = state.weeks;
+
+  // Timestamp
+  document.getElementById('lastUpdateTime').textContent = new Date().toLocaleTimeString('pt-BR', { hour:'2-digit', minute:'2-digit', second:'2-digit' });
+
+  if (!currentWeek) {
+    document.getElementById('weekTitle').innerHTML = 'Nenhuma semana <span>ativa</span>';
+    return;
+  }
+
+  // Week title
+  document.getElementById('weekTitle').innerHTML = `Semana <span>${currentWeek.label}</span>`;
+
+  const demands = (currentWeek.demands || []).filter(d => !d.deleted);
+  const done    = demands.filter(d => d.done);
+  const pending = demands.filter(d => !d.done);
+  const pct     = demands.length ? Math.round(done.length / demands.length * 100) : 0;
+
+  // KPIs
+  document.getElementById('kpi-total').textContent   = demands.length;
+  document.getElementById('kpi-done').textContent    = done.length;
+  document.getElementById('kpi-pending').textContent = pending.length;
+  document.getElementById('kpi-mensais').textContent = demands.filter(d=>d.type==='mensal').length;
+  document.getElementById('kpi-avulsos').textContent = demands.filter(d=>d.type==='avulso').length;
+
+  // Global progress
+  document.getElementById('gp-pct').textContent    = pct + '%';
+  document.getElementById('gp-fill').style.width   = pct + '%';
+
+  // Live — demands with active timer
+  const liveSection = document.getElementById('liveSection');
+  const liveGrid    = document.getElementById('liveGrid');
+  const liveCount   = document.getElementById('liveCount');
+  const liveItems   = demands.filter(d => !d.done && d.timerStartedAt);
+
+  liveCount.textContent = liveItems.length;
+  liveSection.style.display = liveItems.length ? 'block' : 'none';
+
+  function formatLiveElapsed(timerStartedAt, timerAccum) {
+    const extra = Math.floor((Date.now() - timerStartedAt) / 1000);
+    const total = (timerAccum || 0) + extra;
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const s = total % 60;
+    if (h > 0) return h + 'h' + String(m).padStart(2,'0') + 'min';
+    if (m > 0) return m + 'min ' + String(s).padStart(2,'0') + 's';
+    return s + 's';
+  }
+
+  if (liveItems.length) {
+    liveGrid.innerHTML = liveItems.map(d => {
+      const prof = profiles.find(p => p.id === d.person) || { name: d.person, color: '#A855F7', gradFrom: '#6B21A8', gradTo: '#A855F7' };
+      const bg   = `linear-gradient(135deg,${prof.gradFrom||prof.color+'99'},${prof.gradTo||prof.color})`;
+      const avInner = prof.photoUrl
+        ? `<img src="${prof.photoUrl}" style="width:100%;height:100%;object-fit:cover;border-radius:50%" onerror="this.style.display='none'">`
+        : (prof.name||'?')[0].toUpperCase();
+      const typeMap = { mensal:'📅 Mensal', avulso:'⚡ Avulso', aprovacao:'☑️ Aprovação', planejamento:'📝 Plan.' };
+      const elapsed = formatLiveElapsed(d.timerStartedAt, d.timerAccum);
+      return `<div class="live-item">
+        <div class="live-item-person">
+          <div class="live-person-av" style="background:${bg}">${avInner}</div>
+          <span class="live-person-name">${prof.name}</span>
+        </div>
+        ${d.client ? `<div class="live-item-client">${d.client}</div>` : ''}
+        <div class="live-item-desc">${d.desc}</div>
+        <div class="live-item-footer">
+          <span class="tag ${d.type==='mensal'?'tag-mensal':d.type==='avulso'?'tag-avulso':d.type==='planejamento'?'tag-planejamento':'tag-aprovacao'}">${typeMap[d.type]||d.type}</span>
+          <span class="live-timer" id="lt-${d.id}">⏱ ${elapsed}</span>
+        </div>
+      </div>`;
+    }).join('');
+  }
+
+  // Tick timer displays every second
+  if (window._liveTick) clearInterval(window._liveTick);
+  if (liveItems.length) {
+    window._liveTick = setInterval(() => {
+      liveItems.forEach(d => {
+        const el = document.getElementById('lt-' + d.id);
+        if (el) el.textContent = '⏱ ' + formatLiveElapsed(d.timerStartedAt, d.timerAccum);
+      });
+    }, 1000);
+  }
+
+  // Person progress
+  const ppEl = document.getElementById('personProgress');
+  ppEl.innerHTML = profiles.map(p => {
+    const pDemands = demands.filter(d => d.person === p.id);
+    const pDone    = pDemands.filter(d => d.done).length;
+    const pPct     = pDemands.length ? Math.round(pDone / pDemands.length * 100) : 0;
+    const bg       = `linear-gradient(90deg,${p.gradFrom||p.color+'99'},${p.gradTo||p.color})`;
+    return `<div class="person-progress-card">
+      ${avatar(p)}
+      <div class="pp-info">
+        <div class="pp-name">${p.name}</div>
+        <div class="pp-track"><div class="pp-fill" style="width:${pPct}%;${p.tag?'':'background:'+bg}"></div></div>
+        <div class="pp-counts">${pDone}/${pDemands.length} concluídas</div>
+      </div>
+      <div class="pp-pct" style="color:${p.color}">${pPct}%</div>
+    </div>`;
+  }).join('') || `<div class="empty-msg"><div class="ico">👥</div>Nenhum perfil</div>`;
+
+  // Type distribution
+  const types = [
+    { key: 'mensal',       label: '📅 Mensais',     color: '#A855F7', bg: 'rgba(168,85,247,0.5)' },
+    { key: 'avulso',       label: '⚡ Avulsos',     color: '#FCD34D', bg: 'rgba(251,191,36,0.5)' },
+    { key: 'aprovacao',    label: '☑️ Aprovação',    color: '#60A5FA', bg: 'rgba(96,165,250,0.5)' },
+    { key: 'planejamento', label: '📝 Planejamento', color: '#F472B6', bg: 'rgba(244,114,182,0.5)' },
+  ];
+  const maxType = Math.max(...types.map(t => demands.filter(d=>d.type===t.key).length), 1);
+  document.getElementById('tipo-total').textContent = demands.length + ' demandas';
+  document.getElementById('typeDist').innerHTML = types.map(t => {
+    const n = demands.filter(d => d.type === t.key).length;
+    const pctBar = Math.round(n / maxType * 100);
+    return `<div class="type-row">
+      <span class="type-label">${t.label}</span>
+      <div class="type-bar-track"><div class="type-bar-fill" style="width:${pctBar}%;background:${t.bg}"></div></div>
+      <span class="type-count">${n}</span>
+    </div>`;
+  }).join('');
+
+  // Difficulty distribution
+  const diffs = [
+    { key: 'none', label: '😊 Sem dificuldade', color: 'var(--verde)', bg: 'rgba(52,211,153,0.5)' },
+    { key: 'some', label: '😐 Leve',             color: 'var(--amarelo)', bg: 'rgba(252,211,77,0.5)' },
+    { key: 'hard', label: '😓 Alta',              color: 'var(--vermelho)', bg: 'rgba(248,113,113,0.5)' },
+  ];
+  const doneDiff = done.filter(d => d.diff);
+  const maxDiff  = Math.max(...diffs.map(d => doneDiff.filter(x=>x.diff===d.key).length), 1);
+  document.getElementById('diff-total').textContent = doneDiff.length + ' avaliadas';
+  document.getElementById('diffDist').innerHTML = diffs.map(d => {
+    const n = doneDiff.filter(x => x.diff === d.key).length;
+    const pctBar = Math.round(n / maxDiff * 100);
+    return `<div class="type-row">
+      <span class="type-label" style="min-width:110px">${d.label}</span>
+      <div class="type-bar-track"><div class="type-bar-fill" style="width:${pctBar}%;background:${d.bg}"></div></div>
+      <span class="type-count">${n}</span>
+    </div>`;
+  }).join('');
+
+  // Pending demands
+  document.getElementById('pending-count').textContent = pending.length;
+  if (!pending.length) {
+    document.getElementById('pendingList').innerHTML = `<div class="empty-msg"><div class="ico">✅</div>Tudo concluído esta semana!</div>`;
+  } else {
+    const byPerson = {};
+    pending.forEach(d => { (byPerson[d.person] = byPerson[d.person] || []).push(d); });
+    document.getElementById('pendingList').innerHTML = profiles
+      .filter(p => byPerson[p.id]?.length)
+      .map(p => {
+        const ds = byPerson[p.id] || [];
+        return `<div class="pending-section">
+          <div class="pending-section-person">
+            ${smallAvatar(p, 22)}
+            <span class="pending-name">${p.name}</span>
+            <span class="pending-count">${ds.length}</span>
+          </div>
+          ${ds.map(d => `<div class="demand-row">
+            <div class="demand-status-dot ${d.timerStartedAt ? 'dot-running' : 'dot-pending'}"></div>
+            <div class="demand-row-body">
+              <div class="demand-row-desc">${d.client?`<strong style="color:var(--roxo-ultra);margin-right:4px">${d.client}</strong>`:''}${d.desc}</div>
+              <div class="demand-row-meta">
+                ${typeBadge(d.type)}
+                ${d.timerStartedAt ? `<span class="tag" style="background:rgba(252,211,77,.1);color:var(--amarelo);border:1px solid rgba(252,211,77,.2)">⏱ em progresso</span>` : ''}
+              </div>
+            </div>
+          </div>`).join('')}
+        </div>`;
+      }).join('') || `<div class="empty-msg"><div class="ico">✅</div>Tudo concluído!</div>`;
+  }
+
+  // Done demands
+  document.getElementById('done-count').textContent = done.length;
+  if (!done.length) {
+    document.getElementById('doneList').innerHTML = `<div class="empty-msg"><div class="ico">📋</div>Nenhuma concluída ainda</div>`;
+  } else {
+    const byPersonDone = {};
+    done.forEach(d => { (byPersonDone[d.person] = byPersonDone[d.person] || []).push(d); });
+    document.getElementById('doneList').innerHTML = profiles
+      .filter(p => byPersonDone[p.id]?.length)
+      .map(p => {
+        const ds = byPersonDone[p.id] || [];
+        return `<div class="pending-section">
+          <div class="pending-section-person">
+            ${smallAvatar(p, 22)}
+            <span class="pending-name">${p.name}</span>
+            <span class="pending-count">${ds.length}</span>
+          </div>
+          ${ds.map(d => `<div class="demand-row">
+            <div class="demand-status-dot dot-done"></div>
+            <div class="demand-row-body">
+              <div class="demand-row-desc done-text">${d.client?`<strong style="color:var(--roxo-ultra);margin-right:4px;opacity:.6">${d.client}</strong>`:''}${d.desc}</div>
+              <div class="demand-row-meta">
+                ${typeBadge(d.type)}
+                ${d.time ? `<span class="tag tag-time">⏱ ${d.time}</span>` : ''}
+                ${d.completedAt ? `<span class="tag" style="background:rgba(255,255,255,.04);color:var(--prata-escuro);border:1px solid rgba(255,255,255,.08)">${timeAgo(d.completedAt)}</span>` : ''}
+              </div>
+            </div>
+          </div>`).join('')}
+        </div>`;
+      }).join('') || `<div class="empty-msg"><div class="ico">📋</div>Nenhuma concluída</div>`;
+  }
+
+  // Activity (last 24h across all weeks)
+  const cutoff  = Date.now() - 24 * 60 * 60 * 1000;
+  const events  = [];
+  allWeeks.forEach(w => {
+    (w.demands || []).filter(d => !d.deleted).forEach(d => {
+      if (d.done && d.completedAt && new Date(d.completedAt).getTime() > cutoff) {
+        events.push({ type: 'done', ts: d.completedAt, person: getPersonName(d.person, state), desc: d.desc, client: d.client, time: d.time, week: w.label });
+      }
+      if (d.createdAt && new Date(d.createdAt).getTime() > cutoff) {
+        const creator  = d.createdBy || d.person;
+        const assignee = d.person;
+        events.push({ type: 'added', ts: d.createdAt, person: getPersonName(creator, state), forPerson: creator !== assignee ? getPersonName(assignee, state) : null, desc: d.desc, client: d.client, week: w.label });
+      }
+    });
+  });
+  events.sort((a,b) => new Date(b.ts) - new Date(a.ts));
+
+  document.getElementById('activity-badge').textContent = events.length ? events.length + ' eventos' : 'últimas 24h';
+  document.getElementById('activityList').innerHTML = events.length ? events.slice(0,20).map(e => {
+    const forTag = e.forPerson ? ` para <strong>${e.forPerson}</strong>` : '';
+    const label  = e.type === 'done'
+      ? `<strong>${e.person}</strong> concluiu${e.client?` <span style="color:var(--roxo-claro)">${e.client}</span> —`:':'} ${e.desc}${e.time?` <span style="color:var(--verde)">· ⏱ ${e.time}</span>`:''}`
+      : `<strong>${e.person}</strong> adicionou${forTag}: ${e.client?`<span style="color:var(--roxo-claro)">${e.client}</span> — `:''}${e.desc}`;
+    return `<div class="activity-item">
+      <div class="activity-icon ${e.type==='done'?'act-done':'act-added'}">${e.type==='done'?'✓':'+'}</div>
+      <div>
+        <div class="activity-text">${label}</div>
+        <div class="activity-time">${timeAgo(e.ts)}</div>
+      </div>
+    </div>`;
+  }).join('') : `<div class="empty-msg"><div class="ico">📭</div>Nenhuma atividade nas últimas 24h</div>`;
+
+  // History
+  const pastWeeks = allWeeks.slice(1);
+  document.getElementById('history-badge').textContent = pastWeeks.length ? pastWeeks.length + ' semanas' : '—';
+  document.getElementById('historyList').innerHTML = pastWeeks.length ? pastWeeks.map(w => {
+    const wDemands = (w.demands || []).filter(d => !d.deleted && d.done);
+    const wAll     = (w.demands || []).filter(d => !d.deleted);
+    const wPct     = wAll.length ? Math.round(wDemands.length/wAll.length*100) : 0;
+    return `<div style="padding:12px 0;border-bottom:1px solid rgba(255,255,255,0.04)">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+        <span style="font-family:'Montserrat',sans-serif;font-size:12px;font-weight:700">Semana ${w.label}</span>
+        <span style="font-size:11px;color:var(--prata-escuro)">${wDemands.length}/${wAll.length} concluídas · <span style="color:var(--verde)">${wPct}%</span></span>
+      </div>
+      <div style="height:4px;background:rgba(255,255,255,0.06);border-radius:2px;overflow:hidden">
+        <div style="height:100%;width:${wPct}%;background:linear-gradient(90deg,#6B21A8,#34D399);border-radius:2px;transition:width .8s"></div>
+      </div>
+    </div>`;
+  }).join('') : `<div class="empty-msg"><div class="ico">📅</div>Nenhuma semana anterior ainda</div>`;
+}
+
+// ══════════════════════════════════════════════
+// INIT
+// ══════════════════════════════════════════════
+function initDashboard(config) {
+  try {
+    const app = initializeApp(config, 'dashboard-' + Date.now());
+    const db  = getDatabase(app);
+    const dbRef = ref(db, 'tracker');
+
+    document.getElementById('setupScreen').style.display = 'none';
+    document.getElementById('appRoot').style.display    = 'block';
+    document.getElementById('liveBadge').style.display  = 'flex';
+    setSyncStatus('syncing', 'Conectando…');
+
+    onValue(dbRef, (snapshot) => {
+      const data = snapshot.val();
+      setSyncStatus('online', 'Ao vivo');
+      if (data) render(data);
+    }, (error) => {
+      setSyncStatus('error', 'Erro de conexão');
+      console.error(error);
+    });
+
+  } catch(e) {
+    document.getElementById('setupError').style.display = 'block';
+    document.getElementById('setupError').textContent   = 'Config inválida: ' + e.message;
+  }
+}
+
+// Auto-init se já configurado
+const saved = localStorage.getItem('popp_firebase_config');
+if (saved) {
+  try { initDashboard(JSON.parse(saved)); }
+  catch { localStorage.removeItem('popp_firebase_config'); }
+}
+</script>
+</body>
+</html>
