@@ -599,6 +599,55 @@ select.input { appearance: none; }
   color: var(--muted);
 }
 
+.workspace-recovery {
+  display: none;
+  margin-top: 12px;
+  background: var(--surface);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-lg);
+  padding: 14px 16px;
+}
+
+.workspace-recovery.show {
+  display: block;
+}
+
+.workspace-recovery-title {
+  margin: 0 0 5px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.workspace-recovery-text {
+  margin: 0 0 12px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--muted);
+}
+
+.workspace-recovery-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+}
+
+.workspace-recovery .input {
+  height: 42px;
+}
+
+.workspace-recovery .btn-primary {
+  height: 42px;
+  padding: 0 16px;
+  white-space: nowrap;
+}
+
+@media (max-width: 520px) {
+  .workspace-recovery-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .logout {
   width: 100%;
   margin-top: 12px;
@@ -1142,6 +1191,15 @@ select.input { appearance: none; }
             <p>Após o fechamento comercial, o administrador libera o acesso manualmente. Você receberá uma notificação quando o ambiente estiver disponível.</p>
           </div>
 
+          <form class="workspace-recovery" id="workspaceRecoveryForm">
+            <p class="workspace-recovery-title">Criar workspace como admin</p>
+            <p class="workspace-recovery-text">Use esta opção se esta conta for a primeira conta da equipe ou se o banco foi zerado durante os testes.</p>
+            <div class="workspace-recovery-grid">
+              <input class="input" id="workspaceRecoveryAgency" type="text" placeholder="Nome da agência" autocomplete="organization" required />
+              <button class="btn-primary" type="submit">Criar workspace</button>
+            </div>
+          </form>
+
           <button class="logout" id="logoutBtn" type="button">
             <svg viewBox="0 0 16 16" aria-hidden="true">
               <path d="M6 14H3a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1h3"/>
@@ -1312,6 +1370,8 @@ const authView = document.getElementById('authView');
 const sessionView = document.getElementById('sessionView');
 const sessionMeta = document.getElementById('sessionMeta');
 const pendingNotice = document.getElementById('pendingNotice');
+const workspaceRecoveryForm = document.getElementById('workspaceRecoveryForm');
+const workspaceRecoveryAgency = document.getElementById('workspaceRecoveryAgency');
 const message = document.getElementById('message');
 let isBootstrapping = false;
 
@@ -1570,6 +1630,7 @@ function buildSessionMeta(user, access){
   const role = access?.membership?.role || null;
   const isPending = access?.status !== 'active';
   const blockedReason = access?.request?.reason || '';
+  const canCreateWorkspace = isPending && !tenantId;
   const statusBadge = isPending
     ? `<span class="status-badge pending">${blockedReason ? 'Sem workspace' : 'Aguardando aprovação'}</span>`
     : '<span class="status-badge active">Acesso ativo</span>';
@@ -1630,6 +1691,10 @@ function buildSessionMeta(user, access){
   pendingNotice.style.display = isPending ? 'block' : 'none';
   if (blockedReason) pendingNotice.querySelector('p').textContent = blockedReason;
   else pendingNotice.querySelector('p').textContent = 'Sua solicitação está na fila do administrador do workspace. Você será liberado quando o acesso for aprovado.';
+  workspaceRecoveryForm.classList.toggle('show', canCreateWorkspace);
+  if (canCreateWorkspace && !workspaceRecoveryAgency.value.trim()) {
+    workspaceRecoveryAgency.value = user.email?.split('@')[1]?.split('.')[0] || '';
+  }
 }
 
 async function renderSession(user, access){
@@ -1704,6 +1769,32 @@ async function handleGoogleAuth(){
 
 document.getElementById('googleBtn').addEventListener('click', handleGoogleAuth);
 document.getElementById('googleLoginBtn').addEventListener('click', handleGoogleAuth);
+workspaceRecoveryForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  hideMessage();
+  const user = auth.currentUser;
+  const agencyName = workspaceRecoveryAgency.value.trim();
+  if (!user) {
+    showMessage('Faça login novamente para criar o workspace.');
+    return;
+  }
+  if (!agencyName) {
+    showMessage('Informe o nome da agência para criar o workspace.');
+    return;
+  }
+  try {
+    isBootstrapping = true;
+    await createOwnerWorkspace(user, {
+      agencyName,
+      userName: user.displayName || user.email?.split('@')[0] || ''
+    });
+    window.location.href = './app.html';
+  } catch(error) {
+    showMessage(mapAuthError(error));
+  } finally {
+    isBootstrapping = false;
+  }
+});
 document.getElementById('logoutBtn').addEventListener('click', ()=>signOut(auth));
 
 onAuthStateChanged(auth, async (user) => {
