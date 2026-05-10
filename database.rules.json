@@ -10,7 +10,7 @@
       "$uid": {
         ".read": "auth != null && auth.uid == $uid",
         "$tenantId": {
-          ".write": "auth != null && ((auth.uid == $uid && $tenantId == 'tenant_' + auth.uid && !data.exists() && newData.child('status').val() == 'active' && newData.child('role').val() == 'owner') || (root.child('memberships').child(auth.uid).child($tenantId).child('status').val() == 'active' && (root.child('memberships').child(auth.uid).child($tenantId).child('role').val() == 'owner' || root.child('memberships').child(auth.uid).child($tenantId).child('role').val() == 'admin') && (!newData.exists() || (newData.child('status').val() == 'active' && (newData.child('role').val() == 'admin' || newData.child('role').val() == 'member'))))"
+          ".write": "auth != null && ((auth.uid == $uid && $tenantId == 'tenant_' + auth.uid && !data.exists() && newData.child('status').val() == 'active' && newData.child('role').val() == 'owner') || (root.child('memberships').child(auth.uid).child($tenantId).child('status').val() == 'active' && (root.child('memberships').child(auth.uid).child($tenantId).child('role').val() == 'owner' || root.child('memberships').child(auth.uid).child($tenantId).child('role').val() == 'admin') && (!newData.exists() || (newData.child('status').val() == 'active' && (newData.child('role').val() == 'admin' || newData.child('role').val() == 'member')))))"
         }
       }
     },
