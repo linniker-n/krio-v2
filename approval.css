@@ -8,6 +8,96 @@
   animation: none;
 }
 
+.client-portal {
+  display: grid;
+  gap: 20px;
+}
+
+.client-portal-hero,
+.client-portal-section {
+  background: var(--card);
+  border: 1px solid var(--card-border);
+  border-radius: var(--r-xl);
+  box-shadow: var(--shadow-inner);
+}
+
+.client-portal-hero {
+  min-height: 220px;
+  padding: clamp(22px, 4vw, 38px);
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 22px;
+  position: relative;
+  overflow: hidden;
+}
+
+.client-portal-hero::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(120deg, rgba(59,130,246,0.18), transparent 44%),
+    radial-gradient(circle at 86% 18%, rgba(52,211,153,0.12), transparent 34%);
+  pointer-events: none;
+}
+
+.client-portal-hero > * {
+  position: relative;
+  z-index: 1;
+}
+
+.client-portal-hero span {
+  display: block;
+  margin-bottom: 10px;
+  color: var(--brand-2);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.client-portal-hero h1 {
+  margin: 0 0 10px;
+  color: var(--text);
+  font-size: clamp(34px, 7vw, 72px);
+  line-height: 0.92;
+  letter-spacing: -0.05em;
+}
+
+.client-portal-hero p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 15px;
+}
+
+.approval-client-avatar.client-portal-logo {
+  width: clamp(64px, 12vw, 112px);
+  height: clamp(64px, 12vw, 112px);
+  border-radius: 22px;
+  font-size: clamp(24px, 5vw, 44px);
+}
+
+.client-portal-section {
+  padding: clamp(16px, 3vw, 24px);
+}
+
+.client-portal .approval-grouped-board {
+  gap: 14px;
+}
+
+.client-portal .approval-flow-group-card {
+  background: var(--surface);
+}
+
+@media (max-width: 680px) {
+  .client-portal-hero {
+    align-items: flex-start;
+    flex-direction: column-reverse;
+    min-height: auto;
+  }
+}
+
 /* ── Base surfaces ── */
 .approval-hero,
 .approval-panel-head,
@@ -788,6 +878,38 @@
   border-radius: 7px;
   padding: 6px 7px;
   line-height: 1.35;
+}
+
+/* Card reprovado pelo cliente — borda vermelha e badge de alerta */
+.approval-creative.has-revision {
+  border-color: rgba(248, 113, 113, 0.40);
+  box-shadow:
+    0 0 0 1.5px rgba(248, 113, 113, 0.22),
+    0 4px 16px rgba(0,0,0,0.10);
+  position: relative;
+}
+
+.approval-creative.has-revision::before {
+  content: "Refação";
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background: var(--red);
+  color: #fff;
+  font-family: var(--font);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 999px;
+  pointer-events: none;
+  z-index: 2;
+  box-shadow: 0 2px 6px rgba(220,38,38,0.30);
+}
+
+.approval-creative.has-revision .approval-creative-body {
+  background: rgba(248, 113, 113, 0.04);
 }
 
 .approval-card-actions {

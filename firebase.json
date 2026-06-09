@@ -59,6 +59,10 @@
     ],
     "rewrites": [
       {
+        "source": "/approval/**",
+        "destination": "/app.html"
+      },
+      {
         "source": "/app",
         "destination": "/app.html"
       },

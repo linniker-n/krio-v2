@@ -4,6 +4,7 @@
   "private": true,
   "description": "KRIO V2 - plataforma licenciada manualmente para agencias criativas.",
   "scripts": {
+    "dev": "node scripts/dev-server.cjs",
     "serve": "firebase emulators:start --only hosting,database",
     "serve:static": "py -3 -m http.server 8000 --bind 127.0.0.1",
     "check": "node --check scripts/app-shell.js && node -e \"JSON.parse(require('fs').readFileSync('database.rules.json','utf8')); JSON.parse(require('fs').readFileSync('firebase.json','utf8'));\"",

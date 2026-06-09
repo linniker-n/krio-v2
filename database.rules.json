@@ -10,7 +10,7 @@
       "$uid": {
         ".read": "auth != null && auth.uid == $uid",
         "$tenantId": {
-          ".write": "auth != null && ((auth.uid == $uid && $tenantId == 'tenant_' + auth.uid && !data.exists() && newData.child('status').val() == 'active' && newData.child('role').val() == 'owner') || (root.child('memberships').child(auth.uid).child($tenantId).child('status').val() == 'active' && (root.child('memberships').child(auth.uid).child($tenantId).child('role').val() == 'owner' || root.child('memberships').child(auth.uid).child($tenantId).child('role').val() == 'admin') && (!newData.exists() || (newData.child('status').val() == 'active' && (newData.child('role').val() == 'admin' || newData.child('role').val() == 'member')))))"
+          ".write": "auth != null && ((auth.uid == $uid && $tenantId == 'tenant_' + auth.uid && !data.exists() && newData.child('status').val() == 'active' && newData.child('role').val() == 'owner') || (root.child('memberships').child(auth.uid).child($tenantId).child('status').val() == 'active' && (root.child('memberships').child(auth.uid).child($tenantId).child('role').val() == 'owner' || root.child('memberships').child(auth.uid).child($tenantId).child('role').val() == 'admin') && (!newData.exists() || (newData.child('status').val() == 'active' && (newData.child('role').val() == 'admin' || newData.child('role').val() == 'member' || newData.child('role').val() == 'client' || newData.child('role').val() == 'guest')))))"
         }
       }
     },
@@ -35,6 +35,13 @@
         "$tenantId": {
           ".write": "auth != null && (($tenantId == 'tenant_' + auth.uid && !data.exists() && newData.child('ownerUid').val() == auth.uid) || (root.child('memberships').child(auth.uid).child($tenantId).child('status').val() == 'active' && (root.child('memberships').child(auth.uid).child($tenantId).child('role').val() == 'owner' || root.child('memberships').child(auth.uid).child($tenantId).child('role').val() == 'admin')))"
         }
+      }
+    },
+    "approvalPortals": {
+      "$clientId": {
+        ".read": true,
+        ".write": "auth != null && ((newData.exists() && root.child('memberships').child(auth.uid).child(newData.child('tenantId').val()).child('status').val() == 'active' && (root.child('memberships').child(auth.uid).child(newData.child('tenantId').val()).child('role').val() == 'owner' || root.child('memberships').child(auth.uid).child(newData.child('tenantId').val()).child('role').val() == 'admin')) || (data.exists() && root.child('memberships').child(auth.uid).child(data.child('tenantId').val()).child('status').val() == 'active' && (root.child('memberships').child(auth.uid).child(data.child('tenantId').val()).child('role').val() == 'owner' || root.child('memberships').child(auth.uid).child(data.child('tenantId').val()).child('role').val() == 'admin')))",
+        ".validate": "!newData.exists() || (newData.child('tenantId').isString() && newData.child('clientId').val() == $clientId)"
       }
     },
     "tenants": {
@@ -102,7 +109,23 @@
         },
         "approval": {
           ".read": "auth != null && root.child('memberships').child(auth.uid).child($tenantId).child('status').val() == 'active'",
-          ".write": "auth != null && root.child('memberships').child(auth.uid).child($tenantId).child('status').val() == 'active'"
+          ".write": "auth != null && (root.child('memberships').child(auth.uid).child($tenantId).child('role').val() == 'owner' || root.child('memberships').child(auth.uid).child($tenantId).child('role').val() == 'admin')",
+          "clients": {
+            "$clientId": {
+              ".read": "(auth != null && root.child('memberships').child(auth.uid).child($tenantId).child('status').val() == 'active') || root.child('approvalPortals').child($clientId).child('tenantId').val() == $tenantId",
+              ".write": "auth != null && (root.child('memberships').child(auth.uid).child($tenantId).child('role').val() == 'owner' || root.child('memberships').child(auth.uid).child($tenantId).child('role').val() == 'admin')",
+              "groups": {
+                "$groupId": {
+                  "cards": {
+                    "$cardId": {
+                      ".write": "(auth != null && (root.child('memberships').child(auth.uid).child($tenantId).child('role').val() == 'owner' || root.child('memberships').child(auth.uid).child($tenantId).child('role').val() == 'admin')) || (auth != null && root.child('memberships').child(auth.uid).child($tenantId).child('status').val() == 'active' && data.child('status').val() == 'internalRejected' && newData.child('status').val() == 'prov') || (root.child('approvalPortals').child($clientId).child('tenantId').val() == $tenantId && data.child('status').val() == 'clientReview' && (newData.child('status').val() == 'scheduled' || newData.child('status').val() == 'internalRejected'))",
+                      ".validate": "(auth != null && (root.child('memberships').child(auth.uid).child($tenantId).child('role').val() == 'owner' || root.child('memberships').child(auth.uid).child($tenantId).child('role').val() == 'admin')) || (newData.exists() && data.exists() && newData.child('id').val() == data.child('id').val() && newData.child('title').val() == data.child('title').val() && (!data.child('caption').exists() || newData.child('caption').val() == data.child('caption').val()) && (!data.child('imageUrl').exists() || newData.child('imageUrl').val() == data.child('imageUrl').val()) && (!data.child('driveUrl').exists() || newData.child('driveUrl').val() == data.child('driveUrl').val()) && (!data.child('createdAt').exists() || newData.child('createdAt').val() == data.child('createdAt').val()))"
+                    }
+                  }
+                }
+              }
+            }
+          }
         },
         "planning": {
           ".read": "auth != null && (root.child('memberships').child(auth.uid).child($tenantId).child('role').val() == 'owner' || root.child('memberships').child(auth.uid).child($tenantId).child('role').val() == 'admin')",
