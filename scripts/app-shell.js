@@ -53,7 +53,7 @@ const agendaEventTypes = [
 const approvalStatuses = {
   prov: "Provisório",
   internalApproved: "Aprovado internamente",
-  internalRejected: "RefaÃ§Ã£o",
+  internalRejected: "Refação",
   clientReview: "Quadro do cliente",
   scheduled: "Agendamento",
   posted: "Postados",
@@ -175,7 +175,7 @@ async function boot() {
   state.firebase.onAuthStateChanged(state.firebase.auth, async (user) => {
     if (!user) {
       stopRealtimeSync();
-      window.location.href = "./index.html";
+      window.location.href = "/index.html";
       return;
     }
 
@@ -381,7 +381,7 @@ async function loadTenantForUser(user) {
 
   if (!state.tenantId) {
     await registerAccessRequestFromApp(user);
-    window.location.href = "./index.html?access=pending";
+    window.location.href = "/index.html?access=pending";
     throw new Error("access-pending");
   }
 
@@ -398,7 +398,7 @@ async function loadTenantForUser(user) {
     fb.get(fb.ref(fb.db, trashPath))
   ]);
   if (!metaSnap.exists() && !profilesSnap.exists() && !weeksSnap.exists() && !approvalSnap.exists()) {
-    window.location.href = "./index.html?access=missing";
+    window.location.href = "/index.html?access=missing";
     throw new Error("workspace-missing");
   }
   const tenant = {
@@ -718,7 +718,7 @@ function setupShellEvents() {
     if (state.firebase?.auth) {
       await state.firebase.signOut(state.firebase.auth);
     } else {
-      window.location.href = "./index.html";
+      window.location.href = "/index.html";
     }
   });
 
