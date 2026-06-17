@@ -368,10 +368,9 @@ async function registerAccessRequestFromApp(user) {
   const requestSnap = await fb.get(requestRef);
   const current = requestSnap.val() || {};
   if (current.status && current.status !== "pending") return;
-  const inviteTenant = await findTenantByInviteCode(current.inviteCode || new URLSearchParams(window.location.search).get("invite") || "", new URLSearchParams(window.location.search).get("workspace") || "");
-  const tenant = current.tenantId
-    ? { tenantId: current.tenantId, name: current.agencyName || "Workspace" }
-    : inviteTenant || await findTenantByEmailDomain(user.email);
+  const inviteCode = current.inviteCode || new URLSearchParams(window.location.search).get("invite") || "";
+  const inviteTenant = await findTenantByInviteCode(inviteCode, new URLSearchParams(window.location.search).get("workspace") || current.tenantId || "");
+  const tenant = inviteTenant;
   const tenantId = tenant?.tenantId || "";
   const agencyName = current.agencyName || tenant?.name || user.email?.split("@")[1]?.split(".")[0] || "Minha Agência";
   if (!tenantId) return;
@@ -395,39 +394,20 @@ async function registerAccessRequestFromApp(user) {
   await fb.update(fb.ref(fb.db), updates);
 }
 
-async function findTenantByEmailDomain(email = "") {
-  const fb = state.firebase;
-  const key = domainKey(email);
-  if (!fb?.db || !key) return null;
-  const snap = await fb.get(fb.ref(fb.db, `tenantDomains/${key}`));
-  const entries = Object.entries(snap.val() || {});
-  if (!entries.length) return null;
-  entries.sort((a, b) => Number(b[1]?.createdAt || 0) - Number(a[1]?.createdAt || 0));
-  return { tenantId: entries[0][0], ...(entries[0][1] || {}) };
-}
-
 async function findTenantByInviteCode(inviteCode = "", workspaceId = "") {
   const fb = state.firebase;
   const code = normalizeInviteCode(inviteCode);
   const workspace = normalizeWorkspaceId(workspaceId) || inviteWorkspaceFromValue(inviteCode);
-  if (workspace) return { tenantId: workspace, name: "Workspace", inviteCode: code };
   if (!fb?.db || !code) return null;
   try {
     const snap = await fb.get(fb.ref(fb.db, `tenantInvites/${code}`));
     const invite = snap.val() || {};
     if (!snap.exists() || invite.status !== "active" || !invite.tenantId) return null;
+    if (workspace && invite.tenantId !== workspace) return null;
     return { ...invite, inviteCode: code };
   } catch (error) {
     return null;
   }
-}
-
-function domainKey(email = "") {
-  return pathKey(String(email || "").trim().toLowerCase().split("@")[1] || "");
-}
-
-function pathKey(value = "") {
-  return String(value || "").trim().replace(/[.#$\[\]\/]/g, "_");
 }
 
 function normalizeWorkspaceId(value = "") {
@@ -447,7 +427,7 @@ function inviteWorkspaceFromValue(value = "") {
 async function ensureWorkspaceInviteCode() {
   if (!canManageWorkspace() || !state.data?.meta) return "";
   const existing = normalizeInviteCode(state.data.meta.inviteCode || "");
-  const code = existing || generateInviteCode(state.data.meta.name || "KRIO");
+  const code = existing || await generateUniqueInviteCode(state.data.meta.name || "KRIO");
   const now = Date.now();
   state.data.meta.inviteCode = code;
   state.tenantMeta = state.data.meta;
@@ -507,6 +487,16 @@ function generateInviteCode(seed = "KRIO") {
     suffix += alphabet[value % alphabet.length];
   }
   return `${prefix}-${suffix}`;
+}
+
+async function generateUniqueInviteCode(seed = "KRIO") {
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    const code = generateInviteCode(seed);
+    if (!state.firebase?.db || state.demoMode || state.tenantId === "local") return code;
+    const snap = await state.firebase.get(state.firebase.ref(state.firebase.db, `tenantInvites/${code}`));
+    if (!snap.exists()) return code;
+  }
+  return `${slugify(seed).replace(/-/g, "").slice(0, 4).toUpperCase() || "KRIO"}-${Date.now().toString(36).toUpperCase()}`;
 }
 
 function workspaceInviteLink() {

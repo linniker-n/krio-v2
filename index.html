@@ -1412,6 +1412,7 @@ const workspaceRecoveryAgency = document.getElementById('workspaceRecoveryAgency
 const message = document.getElementById('message');
 const initialInviteCode = inviteCodeFromLocation();
 const initialInviteWorkspace = inviteWorkspaceFromLocation();
+const hasInitialInvite = Boolean(initialInviteCode);
 let isBootstrapping = false;
 
 function showSignup(){
@@ -1432,20 +1433,8 @@ function hideMessage(){
   message.className = 'msg'; message.textContent = '';
 }
 
-function pathKey(value=''){
-  return String(value || '').trim().replace(/[.#$\[\]\/]/g,'_');
-}
-
 function normalizeEmail(email=''){
   return String(email || '').trim().toLowerCase();
-}
-
-function emailDomain(email=''){
-  return normalizeEmail(email).split('@')[1] || '';
-}
-
-function domainKey(email=''){
-  return pathKey(emailDomain(email));
 }
 
 function slugify(text=''){
@@ -1493,13 +1482,24 @@ function generateInviteCode(seed='KRIO'){
   return `${prefix}-${suffix}`;
 }
 
+async function generateUniqueInviteCode(seed='KRIO'){
+  for(let attempt = 0; attempt < 12; attempt += 1) {
+    const code = generateInviteCode(seed);
+    const snap = await get(ref(db,`tenantInvites/${code}`));
+    if(!snap.exists()) return code;
+  }
+  return `${slugify(seed).replace(/-/g,'').slice(0,4).toUpperCase() || 'KRIO'}-${Date.now().toString(36).toUpperCase()}`;
+}
+
 function updateSignupMode(){
-  const ownerMode = signupMode.value === 'owner';
+  if(hasInitialInvite) signupMode.value = 'collaborator';
+  const ownerMode = !hasInitialInvite && signupMode.value === 'owner';
+  signupMode.closest('.field').classList.toggle('hidden', hasInitialInvite);
   signupAgency.closest('.field').classList.toggle('hidden', !ownerMode);
   signupRoleField.classList.toggle('hidden', ownerMode);
-  signupInviteField.classList.toggle('hidden', ownerMode);
+  signupInviteField.classList.toggle('hidden', ownerMode || hasInitialInvite);
   signupAgency.required = ownerMode;
-  signupInvite.required = !ownerMode;
+  signupInvite.required = !ownerMode && !hasInitialInvite;
   signupSubmitBtn.textContent = ownerMode ? 'Criar workspace' : 'Solicitar entrada';
 }
 
@@ -1529,8 +1529,7 @@ async function createOwnerWorkspace(user,{agencyName='',userName=''}={}){
   const tenantId = `tenant_${user.uid}`;
   const agency = agencyName || user.email?.split('@')[1]?.split('.')[0] || 'Minha Agência';
   const name = user.displayName || userName || user.email?.split('@')[0] || 'Owner';
-  const domain = domainKey(user.email);
-  const inviteCode = generateInviteCode(agency);
+  const inviteCode = await generateUniqueInviteCode(agency);
   const tenant = {
     meta: {
       name: agency,
@@ -1594,40 +1593,31 @@ async function createOwnerWorkspace(user,{agencyName='',userName=''}={}){
   };
   const updates = {
     [`tenants/${tenantId}`]: tenant,
-    [`memberships/${user.uid}/${tenantId}`]: membership
-  };
-  if(domain) {
-    updates[`tenantDomains/${domain}/${tenantId}`] = {
+    [`memberships/${user.uid}/${tenantId}`]: membership,
+    [`tenantInvites/${inviteCode}`]: {
+      code: inviteCode,
       tenantId,
       name: agency,
       slug: tenant.meta.slug,
       ownerUid: user.uid,
-      createdAt: now
-    };
-  }
+      status: 'active',
+      createdAt: now,
+      updatedAt: now
+    }
+  };
   await update(ref(db), updates);
   return { status:'active', tenantId, membership };
-}
-
-async function findTenantByDomain(email){
-  const key = domainKey(email);
-  if(!key) return null;
-  const snap = await get(ref(db,`tenantDomains/${key}`));
-  const entries = Object.entries(snap.val() || {});
-  if(!entries.length) return null;
-  entries.sort((a,b) => Number(b[1]?.createdAt || 0) - Number(a[1]?.createdAt || 0));
-  return { tenantId: entries[0][0], ...(entries[0][1] || {}) };
 }
 
 async function findTenantByInvite(inviteCode='', workspaceId=''){
   const code = normalizeInviteCode(inviteCode);
   const workspace = normalizeWorkspaceId(workspaceId) || inviteWorkspaceFromValue(inviteCode);
-  if(workspace) return { tenantId: workspace, name: 'Workspace', inviteCode: code };
   if(!code) return null;
   try {
     const snap = await get(ref(db,`tenantInvites/${code}`));
     const invite = snap.val() || {};
     if(!snap.exists() || invite.status !== 'active' || !invite.tenantId) return null;
+    if(workspace && invite.tenantId !== workspace) return null;
     return { ...invite, inviteCode: code };
   } catch(error) {
     return null;
@@ -1637,9 +1627,9 @@ async function findTenantByInvite(inviteCode='', workspaceId=''){
 async function requestCollaboratorAccess(user,{userName='',role='member',inviteCode=''}={}){
   const normalizedInvite = normalizeInviteCode(inviteCode || initialInviteCode);
   const inviteWorkspace = normalizeWorkspaceId(initialInviteWorkspace) || inviteWorkspaceFromValue(inviteCode);
-  const tenant = (normalizedInvite || inviteWorkspace)
+  const tenant = normalizedInvite
     ? await findTenantByInvite(inviteCode || normalizedInvite, inviteWorkspace)
-    : await findTenantByDomain(user.email);
+    : null;
   if(!tenant?.tenantId) {
     return {
       status:'blocked',
@@ -1691,11 +1681,9 @@ async function requestManualAccess(user,{agencyName='',userName='',inviteCode=''
   if(current.status && current.status !== 'pending') return current;
   const normalizedInvite = normalizeInviteCode(inviteCode || initialInviteCode || current.inviteCode || '');
   const inviteWorkspace = normalizeWorkspaceId(initialInviteWorkspace) || inviteWorkspaceFromValue(inviteCode);
-  const tenant = current.tenantId
-    ? { tenantId: current.tenantId, name: current.agencyName || 'Workspace' }
-    : (normalizedInvite || inviteWorkspace)
-      ? await findTenantByInvite(inviteCode || normalizedInvite, inviteWorkspace)
-      : await findTenantByDomain(user.email);
+  const tenant = normalizedInvite
+    ? await findTenantByInvite(inviteCode || normalizedInvite, inviteWorkspace || current.tenantId || '')
+    : null;
   if(!tenant?.tenantId) {
     return {
       status:'blocked',
@@ -1780,7 +1768,7 @@ function buildSessionMeta(user, access){
   const role = access?.membership?.role || null;
   const isPending = access?.status !== 'active';
   const blockedReason = access?.request?.reason || access?.request?.request?.reason || access?.reason || '';
-  const canCreateWorkspace = isPending && !tenantId;
+  const canCreateWorkspace = isPending && !tenantId && !hasInitialInvite;
   const statusBadge = isPending
     ? `<span class="status-badge pending">${blockedReason ? 'Sem workspace' : 'Aguardando aprovação'}</span>`
     : '<span class="status-badge active">Acesso ativo</span>';
@@ -1880,7 +1868,7 @@ updateSignupMode();
 
 signupForm.addEventListener('submit', async (e)=>{
   e.preventDefault(); hideMessage();
-  const mode = signupMode.value;
+  const mode = hasInitialInvite ? 'collaborator' : signupMode.value;
   const agencyName = signupAgency.value.trim();
   const role = signupRole.value;
   const inviteCode = normalizeInviteCode(signupInvite.value || initialInviteCode);
@@ -1915,7 +1903,7 @@ async function handleGoogleAuth(){
     isBootstrapping = true; hideMessage();
     const { user } = await signInWithPopup(auth, provider);
     const signupVisible = signupForm.classList.contains('active');
-    const mode = signupVisible ? signupMode.value : 'login';
+    const mode = hasInitialInvite ? 'collaborator' : (signupVisible ? signupMode.value : 'login');
     const agencyName = signupVisible && mode === 'owner'
       ? (signupAgency.value.trim() || user.email?.split('@')[1]?.split('.')[0] || 'Minha Agência')
       : '';
