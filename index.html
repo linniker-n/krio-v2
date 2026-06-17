@@ -1492,14 +1492,15 @@ async function generateUniqueInviteCode(seed='KRIO'){
 }
 
 function updateSignupMode(){
-  if(hasInitialInvite) signupMode.value = 'collaborator';
-  const ownerMode = !hasInitialInvite && signupMode.value === 'owner';
-  signupMode.closest('.field').classList.toggle('hidden', hasInitialInvite);
+  signupMode.value = hasInitialInvite ? 'collaborator' : 'owner';
+  const ownerMode = !hasInitialInvite;
+  signupMode.closest('.field').classList.add('hidden');
   signupAgency.closest('.field').classList.toggle('hidden', !ownerMode);
   signupRoleField.classList.toggle('hidden', ownerMode);
-  signupInviteField.classList.toggle('hidden', ownerMode || hasInitialInvite);
+  signupInviteField.classList.add('hidden');
   signupAgency.required = ownerMode;
-  signupInvite.required = !ownerMode && !hasInitialInvite;
+  signupInvite.required = false;
+  tabSignup.textContent = ownerMode ? 'Criar workspace' : 'Solicitar acesso';
   signupSubmitBtn.textContent = ownerMode ? 'Criar workspace' : 'Solicitar entrada';
 }
 
