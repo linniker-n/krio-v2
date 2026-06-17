@@ -80,6 +80,7 @@ const state = {
   trackerView: "week",
   trackerFilter: "all",
   currentWeekIndex: 0,
+  approvalOpenClientFolders: {},
   agendaView: "month",
   agendaCursor: isoDate(new Date()),
   approvalClientId: null,
@@ -91,6 +92,7 @@ const state = {
   localWritePending: false,
   localWriteBlockUntil: 0,
   trackerDrag: null,
+  approvalDrag: null,
   accessRequests: [],
   demoMode: new URLSearchParams(window.location.search).has("demo")
 };
@@ -715,7 +717,7 @@ function ensureDialogHosts() {
 
 function handleClick(event) {
   if (event.target.closest("input, textarea, select, label")) return;
-  const button = event.target.closest("button, [data-action], [data-tracker-view], [data-approval-client], [data-demand-id], [data-creative-id], [data-dialog-backdrop]");
+  const button = event.target.closest("button, [data-action], [data-tracker-view], [data-approval-client], [data-client-folder], [data-demand-id], [data-creative-id], [data-dialog-backdrop]");
   if (!button) return;
 
   if (button.matches("[data-dialog-backdrop]") && button === event.target) {
@@ -739,6 +741,13 @@ function handleClick(event) {
     state.approvalClientId = button.dataset.approvalClient;
     state.approvalStatus = "prov";
     render();
+    return;
+  }
+
+  if (button.dataset.clientFolder) {
+    const id = button.dataset.clientFolder;
+    state.approvalOpenClientFolders[id] = !isClientFolderOpen(id);
+    renderModuleActions();
     return;
   }
 
@@ -803,6 +812,9 @@ function handleClick(event) {
     },
     openClientDialog: () => openClientDialog(button.dataset.id),
     deleteClient: () => deleteClient(button.dataset.id),
+    openClientFolderDialog: () => openClientFolderDialog(button.dataset.id),
+    deleteClientFolder: () => deleteClientFolder(button.dataset.id),
+    removeClientFromFolder: () => removeClientFromFolder(button.dataset.folder, button.dataset.client),
     openGroupDialog: () => openGroupDialog(button.dataset.id),
     deleteGroup: () => deleteGroup(button.dataset.id),
     openCreativeDialog: () => openCreativeDialog(button.dataset.id || "", { groupId: button.dataset.group }),
@@ -844,6 +856,9 @@ function canRunAction(action, button) {
     "printTracker",
     "openClientDialog",
     "deleteClient",
+    "openClientFolderDialog",
+    "deleteClientFolder",
+    "removeClientFromFolder",
     "openGroupDialog",
     "deleteGroup"
   ]);
@@ -878,6 +893,10 @@ function handleSubmit(event) {
     event.preventDefault();
     saveClientForm(form);
   }
+  if (form.id === "clientFolderForm") {
+    event.preventDefault();
+    saveClientFolderForm(form);
+  }
   if (form.id === "groupForm") {
     event.preventDefault();
     saveGroupForm(form);
@@ -909,6 +928,19 @@ function handleSubmit(event) {
 }
 
 function handleApprovalDragStart(event) {
+  const clientItem = event.target.closest(".approval-client-nav[draggable='true']");
+  if (clientItem && !event.target.closest("[data-action]")) {
+    const payload = {
+      type: "client",
+      clientId: clientItem.dataset.clientDragId
+    };
+    state.approvalDrag = payload;
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("application/json", JSON.stringify(payload));
+    requestAnimationFrame(() => clientItem.classList.add("dragging"));
+    return;
+  }
+
   if (event.target.closest("button, input, textarea, select, label")) return;
 
   const demandItem = event.target.closest(".tracker-demand-item[draggable='true']");
@@ -926,23 +958,27 @@ function handleApprovalDragStart(event) {
 
   const card = event.target.closest(".approval-creative[draggable='true']");
   if (card) {
-    event.dataTransfer.effectAllowed = "move";
-    event.dataTransfer.setData("application/json", JSON.stringify({
+    const payload = {
       type: "creative",
       creativeId: card.dataset.id,
       fromGroupId: card.dataset.group
-    }));
+    };
+    state.approvalDrag = payload;
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("application/json", JSON.stringify(payload));
     requestAnimationFrame(() => card.classList.add("dragging"));
     return;
   }
 
   const group = event.target.closest(".approval-kanban-column[draggable='true']");
   if (!group || event.target.closest(".approval-creative")) return;
-  event.dataTransfer.effectAllowed = "move";
-  event.dataTransfer.setData("application/json", JSON.stringify({
+  const payload = {
     type: "group",
     groupId: group.dataset.approvalGroup
-  }));
+  };
+  state.approvalDrag = payload;
+  event.dataTransfer.effectAllowed = "move";
+  event.dataTransfer.setData("application/json", JSON.stringify(payload));
   requestAnimationFrame(() => group.classList.add("dragging"));
 }
 
@@ -968,6 +1004,19 @@ function handleApprovalDragOver(event) {
   }
 
   const payload = readApprovalDragPayload(event);
+  if (payload.type === "client") {
+    const folderDropzone = event.target.closest("[data-client-folder-dropzone]");
+    const clientTarget = event.target.closest("[data-client-drop-target]");
+    if (!folderDropzone && !clientTarget) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    folderDropzone?.classList.add("drag-over");
+    if (clientTarget && clientTarget.dataset.clientDropTarget !== payload.clientId) {
+      clientTarget.classList.add("client-drag-over");
+    }
+    return;
+  }
+
   if (payload.type === "group") {
     const board = event.target.closest("[data-approval-group-board]");
     if (!board) return;
@@ -1001,6 +1050,16 @@ function handleApprovalDragLeave(event) {
     groupColumn.classList.remove("group-drag-over");
   }
 
+  const clientFolder = event.target.closest("[data-client-folder-dropzone]");
+  if (clientFolder && !clientFolder.contains(event.relatedTarget)) {
+    clientFolder.classList.remove("drag-over");
+  }
+
+  const clientTarget = event.target.closest("[data-client-drop-target]");
+  if (clientTarget && !clientTarget.contains(event.relatedTarget)) {
+    clientTarget.classList.remove("client-drag-over");
+  }
+
   const dropzone = event.target.closest("[data-approval-dropzone]");
   if (!dropzone || dropzone.contains(event.relatedTarget)) return;
   dropzone.classList.remove("drag-over");
@@ -1011,9 +1070,10 @@ function handleApprovalDragEnd() {
     node.classList.remove("dragging", "drag-over");
   });
   state.trackerDrag = null;
+  state.approvalDrag = null;
 
-  document.querySelectorAll(".approval-creative.dragging, .approval-kanban-column.dragging, .approval-kanban-column.group-drag-over, .approval-kanban-list.drag-over, .approval-upload-zone.drag-over").forEach((node) => {
-    node.classList.remove("dragging", "drag-over", "group-drag-over");
+  document.querySelectorAll(".approval-creative.dragging, .approval-kanban-column.dragging, .approval-kanban-column.group-drag-over, .approval-kanban-list.drag-over, .approval-upload-zone.drag-over, .approval-client-nav.dragging, [data-client-folder-dropzone].drag-over, [data-client-drop-target].client-drag-over").forEach((node) => {
+    node.classList.remove("dragging", "drag-over", "group-drag-over", "client-drag-over");
   });
 }
 
@@ -1042,6 +1102,23 @@ function handleApprovalDrop(event) {
   }
 
   const payload = readApprovalDragPayload(event);
+  if (payload.type === "client") {
+    const folderDropzone = event.target.closest("[data-client-folder-dropzone]");
+    const clientTarget = event.target.closest("[data-client-drop-target]");
+    if (!folderDropzone && !clientTarget) {
+      handleApprovalDragEnd();
+      return;
+    }
+    event.preventDefault();
+    if (folderDropzone) {
+      moveClientToFolder(payload.clientId, folderDropzone.dataset.clientFolderDropzone);
+    } else if (clientTarget) {
+      createClientFolderFromClients(payload.clientId, clientTarget.dataset.clientDropTarget);
+    }
+    handleApprovalDragEnd();
+    return;
+  }
+
   if (payload.type === "group") {
     const board = event.target.closest("[data-approval-group-board]");
     if (!board) return;
@@ -1069,9 +1146,10 @@ function handleApprovalDrop(event) {
 
 function readApprovalDragPayload(event) {
   try {
-    return JSON.parse(event.dataTransfer?.getData("application/json") || "{}");
+    const raw = event.dataTransfer?.getData("application/json") || "";
+    return raw ? JSON.parse(raw) : state.approvalDrag || {};
   } catch (error) {
-    return {};
+    return state.approvalDrag || {};
   }
 }
 
@@ -1256,7 +1334,7 @@ function applyRoleVisibility() {
   document.querySelectorAll("[data-tracker-view]").forEach((button) => {
     button.hidden = !canAccessTrackerView(button.dataset.trackerView);
   });
-  document.querySelectorAll('[data-action="openPersonDialog"], [data-action="deletePerson"], [data-action="togglePersonDemandType"], [data-action="deleteWeek"], [data-action="openPlanDialog"], [data-action="exportTracker"], [data-action="printTracker"], [data-action="openClientDialog"], [data-action="deleteClient"], [data-action="openGroupDialog"], [data-action="deleteGroup"]').forEach((button) => {
+  document.querySelectorAll('[data-action="openPersonDialog"], [data-action="deletePerson"], [data-action="togglePersonDemandType"], [data-action="deleteWeek"], [data-action="openPlanDialog"], [data-action="exportTracker"], [data-action="printTracker"], [data-action="openClientDialog"], [data-action="deleteClient"], [data-action="openClientFolderDialog"], [data-action="deleteClientFolder"], [data-action="removeClientFromFolder"], [data-action="openGroupDialog"], [data-action="deleteGroup"]').forEach((button) => {
     button.hidden = !canManageWorkspace();
   });
   document.querySelectorAll(".side-section-title").forEach((title) => {
@@ -1357,18 +1435,58 @@ function renderModuleActions() {
   }
 
   const clients = getClients();
+  const folders = getClientFolders();
+  const ungroupedClients = getUngroupedClients();
   mount.innerHTML = `
-    <nav class="side-nav" aria-label="Clientes">
+    <nav class="side-nav approval-client-side-nav" aria-label="Clientes">
       <div class="side-section-title">Clientes</div>
-      ${clients.map((client) => `
-        <button class="nav-btn ${state.approvalClientId === client.id ? "active" : ""}" type="button" data-approval-client="${attr(client.id)}">
-          <span class="side-icon">${clientAvatar(client, "small")}</span>
-          <span class="side-label">${esc(client.name)}</span>
-        </button>`).join("")}
+      ${folders.map(renderClientFolderNav).join("")}
+      ${ungroupedClients.length && folders.length ? `<div class="side-section-title compact">Soltos</div>` : ""}
+      ${ungroupedClients.map(renderClientNavButton).join("")}
+      ${!clients.length ? `<div class="approval-side-empty">Nenhum cliente cadastrado.</div>` : ""}
+      <button class="nav-btn" type="button" data-action="openClientFolderDialog">
+        <span class="side-icon">${icons.plus}</span><span class="side-label">Novo grupo</span>
+      </button>
       <button class="nav-btn" type="button" data-action="openClientDialog">
         <span class="side-icon">${icons.plus}</span><span class="side-label">Novo cliente</span>
       </button>
     </nav>`;
+}
+
+function renderClientFolderNav(folder) {
+  const clients = folder.clientIds.map((id) => getClient(id)).filter(Boolean);
+  const isOpen = isClientFolderOpen(folder.id) || clients.some((client) => client.id === state.approvalClientId);
+  const active = clients.some((client) => client.id === state.approvalClientId);
+  return `
+    <div class="approval-client-folder ${isOpen ? "open" : ""} ${active ? "active" : ""}" data-client-folder-dropzone="${attr(folder.id)}">
+      <button class="nav-btn approval-folder-toggle ${active ? "active" : ""}" type="button" data-client-folder="${attr(folder.id)}" aria-expanded="${isOpen ? "true" : "false"}">
+        <span class="side-icon approval-folder-stack">${folderIconMarkup(clients)}</span>
+        <span class="side-label">${esc(folder.name)}</span>
+        <span class="nav-count">${clients.length}</span>
+      </button>
+      <div class="approval-folder-actions">
+        <button class="krio-icon-btn small" type="button" title="Editar grupo" aria-label="Editar grupo" data-action="openClientFolderDialog" data-id="${attr(folder.id)}">${icons.edit}</button>
+        <button class="krio-icon-btn small danger" type="button" title="Excluir grupo" aria-label="Excluir grupo" data-action="deleteClientFolder" data-id="${attr(folder.id)}">${icons.trash}</button>
+      </div>
+      <div class="approval-folder-children" ${isOpen ? "" : "hidden"}>
+        ${clients.map((client) => renderClientNavButton(client, folder.id)).join("") || `<div class="approval-side-empty small">Arraste clientes para este grupo.</div>`}
+      </div>
+    </div>`;
+}
+
+function renderClientNavButton(client, folderId = "") {
+  return `
+    <button class="nav-btn approval-client-nav ${folderId ? "nested" : ""} ${state.approvalClientId === client.id ? "active" : ""}" type="button" draggable="${canManageWorkspace() ? "true" : "false"}" data-approval-client="${attr(client.id)}" data-client-drag-id="${attr(client.id)}" data-client-drop-target="${attr(client.id)}">
+      <span class="side-icon">${clientAvatar(client, "small")}</span>
+      <span class="side-label">${esc(client.name)}</span>
+      ${folderId ? `<span class="approval-client-unfolder" title="Remover do grupo" aria-label="Remover do grupo" data-action="removeClientFromFolder" data-folder="${attr(folderId)}" data-client="${attr(client.id)}">${icons.close}</span>` : ""}
+    </button>`;
+}
+
+function folderIconMarkup(clients) {
+  const shown = clients.slice(0, 3);
+  if (!shown.length) return icons.team;
+  return `<span class="approval-folder-mini-stack">${shown.map((client) => clientAvatar(client, "tiny")).join("")}</span>`;
 }
 
 function sideButton(view, label, iconMarkup, active) {
@@ -2733,8 +2851,140 @@ async function saveClientForm(form) {
 
 function deleteClient(id) {
   delete state.data.approval.clients[id];
+  getClientFolders().forEach((folder) => {
+    const stored = getClientFolder(folder.id);
+    if (stored) stored.clientIds = uniqueClientIds(stored.clientIds).filter((clientId) => clientId !== id);
+  });
   if (state.approvalClientId === id) state.approvalClientId = null;
   closeDialogs();
+  saveAndRender();
+}
+
+function openClientFolderDialog(id = "") {
+  const folder = id ? getClientFolder(id) : null;
+  const selected = new Set(uniqueClientIds(folder?.clientIds || []));
+  const clients = getClients();
+  $("#approvalDialogHost").innerHTML = `
+    <div class="approval-dialog-backdrop" data-dialog-backdrop>
+      <div class="approval-dialog" role="dialog" aria-modal="true" aria-labelledby="clientFolderDialogTitle">
+        <div class="approval-dialog-head">
+          <div><strong id="clientFolderDialogTitle">${folder ? "Editar grupo de clientes" : "Novo grupo de clientes"}</strong><span>Organize franquias, unidades ou marcas do mesmo cliente.</span></div>
+          <button class="krio-icon-btn" type="button" data-action="closeDialog" aria-label="Fechar">${icons.close}</button>
+        </div>
+        <form id="clientFolderForm" class="approval-form" data-id="${attr(id)}">
+          <label class="approval-field">Nome do grupo
+            <input class="krio-input" name="name" required value="${attr(folder?.name || "")}" placeholder="Ex: Rede Norte, Franquias SP...">
+          </label>
+          <div class="approval-field">
+            Clientes dentro do grupo
+            <div class="approval-folder-client-list">
+              ${clients.length ? clients.map((client) => `
+                <label class="approval-folder-client-option">
+                  <input type="checkbox" name="clientIds" value="${attr(client.id)}" ${selected.has(client.id) ? "checked" : ""}>
+                  ${clientAvatar(client, "small")}
+                  <span>${esc(client.name)}</span>
+                </label>`).join("") : `<div class="approval-empty small">Cadastre clientes antes de criar grupos.</div>`}
+            </div>
+          </div>
+          <div class="approval-dialog-actions">
+            ${folder ? `<button class="krio-btn danger" type="button" data-action="deleteClientFolder" data-id="${attr(id)}">Excluir</button>` : ""}
+            <button class="krio-btn" type="button" data-action="closeDialog">Cancelar</button>
+            <button class="krio-btn primary" type="submit">Salvar</button>
+          </div>
+        </form>
+      </div>
+    </div>`;
+}
+
+function saveClientFolderForm(form) {
+  const formData = new FormData(form);
+  const name = String(formData.get("name") || "").trim();
+  if (!name) return;
+  const id = form.dataset.id || newId("client_folder");
+  const clientIds = uniqueClientIds(formData.getAll("clientIds"));
+  state.data.approval.clientFolders ||= {};
+  removeClientIdsFromOtherFolders(clientIds, id);
+  state.data.approval.clientFolders[id] = {
+    ...(state.data.approval.clientFolders[id] || {}),
+    id,
+    name,
+    clientIds,
+    createdAt: state.data.approval.clientFolders[id]?.createdAt || Date.now(),
+    updatedAt: Date.now()
+  };
+  state.approvalOpenClientFolders[id] = true;
+  closeDialogs();
+  saveAndRender();
+}
+
+function deleteClientFolder(id) {
+  if (!state.data.approval.clientFolders?.[id]) return;
+  delete state.data.approval.clientFolders[id];
+  delete state.approvalOpenClientFolders[id];
+  closeDialogs();
+  saveAndRender();
+}
+
+function removeClientFromFolder(folderId, clientId) {
+  const folder = getClientFolder(folderId);
+  if (!folder || !clientId) return;
+  folder.clientIds = uniqueClientIds(folder.clientIds).filter((id) => id !== clientId);
+  folder.updatedAt = Date.now();
+  saveAndRender();
+}
+
+function removeClientIdsFromOtherFolders(clientIds, exceptFolderId = "") {
+  const ids = new Set(clientIds);
+  getClientFolders().forEach((folder) => {
+    if (folder.id === exceptFolderId) return;
+    const stored = getClientFolder(folder.id);
+    if (!stored) return;
+    stored.clientIds = uniqueClientIds(stored.clientIds).filter((id) => !ids.has(id));
+    stored.updatedAt = Date.now();
+  });
+}
+
+function findClientFolderByClientId(clientId) {
+  return getClientFolders().find((folder) => folder.clientIds.includes(clientId)) || null;
+}
+
+function moveClientToFolder(clientId, folderId) {
+  const client = getClient(clientId);
+  const folder = getClientFolder(folderId);
+  if (!client || !folder) return;
+  const nextIds = uniqueClientIds([...(folder.clientIds || []), clientId]);
+  removeClientIdsFromOtherFolders([clientId], folderId);
+  folder.clientIds = nextIds;
+  folder.updatedAt = Date.now();
+  state.approvalOpenClientFolders[folderId] = true;
+  saveAndRender();
+}
+
+function createClientFolderFromClients(sourceClientId, targetClientId) {
+  if (!sourceClientId || !targetClientId || sourceClientId === targetClientId) return;
+  const source = getClient(sourceClientId);
+  const target = getClient(targetClientId);
+  if (!source || !target) return;
+
+  const targetFolder = findClientFolderByClientId(targetClientId);
+  if (targetFolder) {
+    moveClientToFolder(sourceClientId, targetFolder.id);
+    return;
+  }
+
+  const id = newId("client_folder");
+  const name = `Grupo ${target.name}`;
+  const clientIds = uniqueClientIds([targetClientId, sourceClientId]);
+  state.data.approval.clientFolders ||= {};
+  removeClientIdsFromOtherFolders(clientIds);
+  state.data.approval.clientFolders[id] = {
+    id,
+    name,
+    clientIds,
+    createdAt: Date.now(),
+    updatedAt: Date.now()
+  };
+  state.approvalOpenClientFolders[id] = true;
   saveAndRender();
 }
 
@@ -4094,17 +4344,19 @@ function normalizeTenant(raw, user) {
     };
   }
 
+  const useSeedFallback = state.demoMode || state.tenantId === "local" || !raw?.meta;
   const weeks = asArray(raw?.tracker?.weeks).length
     ? asArray(raw.tracker.weeks).map((week) => normalizeWeek(week, profiles))
-    : seed.tracker.weeks.map((week) => normalizeWeek(week, profiles));
+    : useSeedFallback ? seed.tracker.weeks.map((week) => normalizeWeek(week, profiles)) : [];
 
   const clients = raw?.approval?.clients && Object.keys(raw.approval.clients).length
     ? raw.approval.clients
-    : seed.approval.clients;
+    : useSeedFallback ? seed.approval.clients : {};
 
   Object.entries(clients).forEach(([id, client]) => {
     clients[id] = normalizeApprovalClient(client, id);
   });
+  const clientFolders = normalizeClientFolders(raw?.approval?.clientFolders || (useSeedFallback ? seed.approval.clientFolders : {}), clients);
 
   return {
     meta,
@@ -4116,7 +4368,8 @@ function normalizeTenant(raw, user) {
       trash: flattenTrash(raw?.tracker?.trash || raw?.trash)
     },
     approval: {
-      clients
+      clients,
+      clientFolders
     }
   };
 }
@@ -4157,7 +4410,31 @@ function normalizeApprovalState(rawApproval = {}) {
   Object.entries(clients).forEach(([id, client]) => {
     clients[id] = normalizeApprovalClient(client, id);
   });
-  return { clients };
+  return {
+    clients,
+    clientFolders: normalizeClientFolders(rawApproval?.clientFolders || {}, clients)
+  };
+}
+
+function normalizeClientFolders(rawFolders = {}, clients = state.data?.approval?.clients || {}) {
+  const folders = normalizeObjectCollection(rawFolders);
+  Object.entries(folders).forEach(([id, folder]) => {
+    const seen = new Set();
+    const clientIds = asArray(folder.clientIds).map(String).filter((clientId) => {
+      if (!clientId || seen.has(clientId) || !clients[clientId]) return false;
+      seen.add(clientId);
+      return true;
+    });
+    folders[id] = {
+      id: folder.id || id,
+      name: folder.name || "Grupo de clientes",
+      clientIds,
+      order: Number(folder.order || 0),
+      createdAt: folder.createdAt || Date.now(),
+      updatedAt: folder.updatedAt || folder.createdAt || Date.now()
+    };
+  });
+  return folders;
 }
 
 function normalizeAgendaEvents(value = []) {
@@ -4369,6 +4646,7 @@ function seedData(user) {
     profiles,
     tracker: { weeks: [week], events: [], trash: [] },
     approval: {
+      clientFolders: {},
       clients: {
         client_alpha: {
           id: "client_alpha",
@@ -4520,6 +4798,47 @@ function getClients() {
 
 function getClient(id) {
   return state.data.approval.clients?.[id] || null;
+}
+
+function getClientFolders() {
+  return Object.values(state.data.approval.clientFolders || {}).map((folder) => ({
+    ...folder,
+    clientIds: uniqueClientIds(folder.clientIds)
+  })).sort((a, b) => {
+    const order = Number(a.order || 0) - Number(b.order || 0);
+    if (order !== 0) return order;
+    return (a.createdAt || 0) - (b.createdAt || 0);
+  });
+}
+
+function getClientFolder(id) {
+  return state.data.approval.clientFolders?.[id] || null;
+}
+
+function uniqueClientIds(ids = []) {
+  const seen = new Set();
+  return asArray(ids).map(String).filter((id) => {
+    if (!id || seen.has(id) || !getClient(id)) return false;
+    seen.add(id);
+    return true;
+  });
+}
+
+function groupedClientIdSet(exceptFolderId = "") {
+  return getClientFolders().reduce((set, folder) => {
+    if (folder.id === exceptFolderId) return set;
+    folder.clientIds.forEach((id) => set.add(id));
+    return set;
+  }, new Set());
+}
+
+function getUngroupedClients() {
+  const grouped = groupedClientIdSet();
+  return getClients().filter((client) => !grouped.has(client.id));
+}
+
+function isClientFolderOpen(id) {
+  return Boolean(state.approvalOpenClientFolders?.[id]);
 }
 
 function getApprovalGroups(client) {

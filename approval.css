@@ -181,6 +181,175 @@
   font-size: 9px;
 }
 
+.approval-client-avatar.tiny {
+  width: 16px; height: 16px;
+  flex: 0 0 16px;
+  border-radius: 5px;
+  font-size: 7px;
+  border: 1px solid rgba(255,255,255,0.22);
+}
+
+.approval-client-side-nav {
+  gap: 3px;
+}
+
+.side-section-title.compact {
+  padding-top: 8px;
+  opacity: 0.78;
+}
+
+.approval-client-folder {
+  position: relative;
+  display: grid;
+  gap: 2px;
+  border-radius: var(--r-lg);
+}
+
+.approval-client-folder.drag-over {
+  background: rgba(59,130,246,0.08);
+  box-shadow: inset 0 0 0 1px rgba(96,165,250,0.22);
+}
+
+.approval-folder-toggle {
+  padding-right: 54px;
+}
+
+.approval-folder-toggle .nav-count {
+  margin-left: auto;
+}
+
+.approval-folder-stack {
+  overflow: visible;
+}
+
+.approval-folder-mini-stack {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+}
+
+.approval-folder-mini-stack .approval-client-avatar.tiny + .approval-client-avatar.tiny {
+  margin-left: -7px;
+}
+
+.approval-folder-actions {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--t-fast) var(--ease-out);
+}
+
+.approval-client-folder:hover .approval-folder-actions,
+.approval-client-folder:focus-within .approval-folder-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.approval-folder-actions .krio-icon-btn.small {
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+}
+
+.approval-folder-children {
+  display: grid;
+  gap: 2px;
+  padding-left: 13px;
+  padding-bottom: 3px;
+}
+
+.approval-client-nav.nested {
+  height: 32px;
+  padding-left: 7px;
+}
+
+.approval-client-nav.dragging {
+  opacity: 0.32;
+  transform: scale(0.98);
+}
+
+.approval-client-nav.client-drag-over {
+  background: rgba(96,165,250,0.12);
+  box-shadow: inset 0 0 0 1px rgba(96,165,250,0.24);
+}
+
+.approval-client-unfolder {
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border-radius: 7px;
+  color: var(--muted-2);
+  opacity: 0;
+  flex: 0 0 20px;
+  transition: opacity var(--t-fast) var(--ease-out), background var(--t-fast) var(--ease-out), color var(--t-fast) var(--ease-out);
+}
+
+.approval-client-nav:hover .approval-client-unfolder,
+.approval-client-nav:focus-visible .approval-client-unfolder {
+  opacity: 1;
+}
+
+.approval-client-unfolder:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.approval-side-empty {
+  margin: 4px 8px 7px;
+  padding: 8px;
+  border: 1px dashed var(--line-soft);
+  border-radius: var(--r-md);
+  color: var(--muted-2);
+  font-size: 11px;
+  line-height: 1.3;
+}
+
+.approval-side-empty.small {
+  margin: 2px 0 4px;
+  padding: 7px;
+}
+
+.approval-folder-client-list {
+  display: grid;
+  gap: 7px;
+  max-height: 260px;
+  overflow: auto;
+  padding: 2px;
+}
+
+.approval-folder-client-option {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  padding: 8px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.approval-folder-client-option input {
+  accent-color: var(--brand);
+}
+
+.approval-folder-client-option span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .approval-client-main {
   min-width: 0;
   display: grid;
