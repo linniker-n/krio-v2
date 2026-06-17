@@ -859,7 +859,6 @@ function canRunAction(action, button) {
     "openClientFolderDialog",
     "deleteClientFolder",
     "removeClientFromFolder",
-    "openGroupDialog",
     "deleteGroup"
   ]);
   if (workspaceActions.has(action)) return canManageWorkspace();
@@ -1334,7 +1333,7 @@ function applyRoleVisibility() {
   document.querySelectorAll("[data-tracker-view]").forEach((button) => {
     button.hidden = !canAccessTrackerView(button.dataset.trackerView);
   });
-  document.querySelectorAll('[data-action="openPersonDialog"], [data-action="deletePerson"], [data-action="togglePersonDemandType"], [data-action="deleteWeek"], [data-action="openPlanDialog"], [data-action="exportTracker"], [data-action="printTracker"], [data-action="openClientDialog"], [data-action="deleteClient"], [data-action="openClientFolderDialog"], [data-action="deleteClientFolder"], [data-action="removeClientFromFolder"], [data-action="openGroupDialog"], [data-action="deleteGroup"]').forEach((button) => {
+  document.querySelectorAll('[data-action="openPersonDialog"], [data-action="deletePerson"], [data-action="togglePersonDemandType"], [data-action="deleteWeek"], [data-action="openPlanDialog"], [data-action="exportTracker"], [data-action="printTracker"], [data-action="openClientDialog"], [data-action="deleteClient"], [data-action="openClientFolderDialog"], [data-action="deleteClientFolder"], [data-action="removeClientFromFolder"], [data-action="deleteGroup"]').forEach((button) => {
     button.hidden = !canManageWorkspace();
   });
   document.querySelectorAll(".side-section-title").forEach((title) => {
@@ -2988,6 +2987,7 @@ function createClientFolderFromClients(sourceClientId, targetClientId) {
 function openGroupDialog(id = "") {
   const client = getClient(state.approvalClientId);
   if (!client) {
+    if (!canManageWorkspace()) return;
     openClientDialog();
     return;
   }
