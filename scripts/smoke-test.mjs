@@ -3,7 +3,7 @@ import { once } from "node:events";
 import { chromium } from "playwright";
 
 const rootUrl = process.env.KRIO_SMOKE_URL || "http://127.0.0.1:8000";
-const appSmokePath = process.env.KRIO_SMOKE_URL ? "/app" : "/app/index.html";
+const appSmokePath = process.env.KRIO_SMOKE_URL ? "/app/" : "/app/index.html";
 let server;
 
 if (!process.env.KRIO_SMOKE_URL) {
