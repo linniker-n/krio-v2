@@ -1850,7 +1850,7 @@ function renderTeam() {
     <div class="team-invite-card">
       <div class="team-invite-copy">
         <span>Convite do workspace</span>
-        <strong>${esc(inviteCode)}</strong>
+        <strong>${esc(workspaceName)}</strong>
         <small>Envie este link para qualquer colaborador, mesmo com Gmail pessoal.</small>
       </div>
       <div class="team-invite-actions">
@@ -2626,11 +2626,18 @@ async function saveWorkspaceForm(form) {
 
   markLocalWrite();
   try {
-    await state.firebase.update(state.firebase.ref(state.firebase.db), {
+    const updates = {
       [`tenants/${state.tenantId}/meta/name`]: name,
       [`tenants/${state.tenantId}/meta/slug`]: slug,
       [`tenants/${state.tenantId}/updatedAt`]: now
-    });
+    };
+    const inviteCode = normalizeInviteCode(state.data.meta.inviteCode || "");
+    if (inviteCode) {
+      updates[`tenantInvites/${inviteCode}/name`] = name;
+      updates[`tenantInvites/${inviteCode}/slug`] = slug;
+      updates[`tenantInvites/${inviteCode}/updatedAt`] = now;
+    }
+    await state.firebase.update(state.firebase.ref(state.firebase.db), updates);
     releaseLocalWrite(true);
     setSyncState("online", "Nome do workspace atualizado");
   } catch (error) {
