@@ -957,59 +957,51 @@ body { padding: 0; }
 
 @media (max-width: 720px) {
   .app-shell {
-    grid-template-columns: 1fr;
+    display: block;
   }
 
   .app-sidebar {
-    position: sticky;
-    height: auto;
-    flex-direction: row;
-    align-items: center;
-    justify-content: space-between;
-    padding: 0 12px;
-    border-right: none;
-    border-bottom: 1px solid var(--line);
-    z-index: 300;
-    min-height: 52px;
+    display: none;
   }
 
-  .sidebar-head {
-    border-bottom: none;
-    padding: 8px 0;
-    min-height: auto;
+  .app-body {
+    min-height: 100dvh;
   }
 
-  .side-module-actions {
-    display: flex;
-    flex-direction: row;
-    overflow-x: auto;
-    overflow-y: hidden;
-    padding: 0 4px;
-    flex: 1;
-  }
-
-  .side-nav {
-    flex-direction: row;
-    gap: 2px;
-  }
-
-  .side-nav .nav-btn {
-    width: auto;
-    min-width: 38px;
-    justify-content: center;
+  .app-topbar {
+    top: 0;
+    height: 54px;
     padding: 0 8px;
-    gap: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
   }
 
-  .side-nav .nav-btn::before { display: none; }
-  .side-nav .nav-btn .side-label { display: none; }
-  .side-section-title { display: none; }
+  .app-topbar::-webkit-scrollbar { display: none; }
 
-  .sidebar-footer { display: none; }
-  .sidebar-toggle { display: none; }
-  .sidebar-controls { display: none; }
-  .brand-name { display: none; }
-  .brand-tagline { display: none; }
+  .app-tab-nav {
+    min-width: max-content;
+    padding-left: 0;
+  }
 
-  .main { padding: 16px 14px 56px; }
+  .app-tab {
+    padding: 0 11px;
+    font-size: 12px;
+  }
+
+  .app-tab.active::after {
+    left: 11px;
+    right: 11px;
+  }
+
+  .app-topbar-right {
+    margin-left: auto;
+  }
+
+  .shell-btn {
+    height: 30px;
+    padding: 0 9px;
+    font-size: 11px;
+  }
+
+  .main { padding: 18px 10px 64px; }
 }
