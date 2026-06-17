@@ -1241,6 +1241,84 @@ select.krio-input option {
 .tracker-profile-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .tracker-profile-dot { width: 12px; height: 12px; border-radius: 50%; flex: 0 0 12px; }
 
+.team-access-panel {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 14px;
+  padding: 14px;
+  border: 1px solid rgba(59,130,246,0.18);
+  border-radius: var(--r-xl);
+  background: rgba(59,130,246,0.055);
+  box-shadow: var(--shadow-inner);
+}
+
+.team-access-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.team-access-head strong {
+  display: block;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+
+.team-access-head span {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.team-access-count {
+  min-width: 26px;
+  height: 26px;
+  display: grid !important;
+  place-items: center;
+  margin-top: 0 !important;
+  border-radius: var(--r-md);
+  background: var(--brand);
+  color: #fff !important;
+  font-size: 12px !important;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+}
+
+.team-access-list {
+  gap: 8px;
+}
+
+.team-access-request {
+  grid-template-columns: minmax(0, 1fr) max-content;
+  background: rgba(255,255,255,0.045);
+  border-color: rgba(251,191,36,0.28);
+}
+
+.team-access-empty {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px dashed var(--line);
+  border-radius: var(--r-lg);
+  background: rgba(255,255,255,0.025);
+}
+
+.team-access-empty strong {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.team-access-empty span {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
 .team-assignment-list { gap: 10px; }
 
 .team-assignment-card {

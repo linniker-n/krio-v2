@@ -367,10 +367,16 @@ async function registerAccessRequestFromApp(user) {
   const requestSnap = await fb.get(requestRef);
   const current = requestSnap.val() || {};
   if (current.status && current.status !== "pending") return;
-  const agencyName = current.agencyName || user.email?.split("@")[1]?.split(".")[0] || "Minha Agência";
-  await fb.set(requestRef, {
+  const tenant = current.tenantId
+    ? { tenantId: current.tenantId, name: current.agencyName || "Workspace" }
+    : await findTenantByEmailDomain(user.email);
+  const tenantId = tenant?.tenantId || "";
+  const agencyName = current.agencyName || tenant?.name || user.email?.split("@")[1]?.split(".")[0] || "Minha Agência";
+  if (!tenantId) return;
+  const payload = {
     ...current,
     uid: user.uid,
+    ...(tenantId ? { tenantId } : {}),
     agencyName,
     userName: user.displayName || user.email?.split("@")[0] || "Usuário",
     email: user.email || "",
@@ -378,7 +384,31 @@ async function registerAccessRequestFromApp(user) {
     source: "app",
     requestedAt: current.requestedAt || now,
     updatedAt: now
-  });
+  };
+  const updates = {
+    [`accessRequests/${user.uid}`]: payload
+  };
+  if (tenantId) updates[`tenantAccessRequests/${tenantId}/${user.uid}`] = payload;
+  await fb.update(fb.ref(fb.db), updates);
+}
+
+async function findTenantByEmailDomain(email = "") {
+  const fb = state.firebase;
+  const key = domainKey(email);
+  if (!fb?.db || !key) return null;
+  const snap = await fb.get(fb.ref(fb.db, `tenantDomains/${key}`));
+  const entries = Object.entries(snap.val() || {});
+  if (!entries.length) return null;
+  entries.sort((a, b) => Number(b[1]?.createdAt || 0) - Number(a[1]?.createdAt || 0));
+  return { tenantId: entries[0][0], ...(entries[0][1] || {}) };
+}
+
+function domainKey(email = "") {
+  return pathKey(String(email || "").trim().toLowerCase().split("@")[1] || "");
+}
+
+function pathKey(value = "") {
+  return String(value || "").trim().replace(/[.#$\[\]\/]/g, "_");
 }
 
 function finishBoot() {
@@ -1138,9 +1168,12 @@ function applyRoleVisibility() {
 function renderUser() {
   const name = state.user?.displayName || state.user?.email?.split("@")[0] || "Usuário";
   const role = `${state.tenantMeta?.name || "Workspace Krio"} · ${accessRoleLabel(currentAccessRole())}`;
+  const userBlock = $("#userBlock");
   const avatar = $("#userAvatar");
   const userName = $("#userName");
   const userRole = $("#userRole");
+  const userSettingsIcon = $("#userSettingsIcon");
+  const canEditProfile = canManageWorkspace();
 
   if (avatar) {
     avatar.hidden = false;
@@ -1155,6 +1188,22 @@ function renderUser() {
   if (userRole) {
     userRole.hidden = false;
     userRole.textContent = role;
+  }
+  if (userBlock) {
+    userBlock.disabled = !canEditProfile;
+    userBlock.title = canEditProfile ? "Editar meu perfil" : "Perfil";
+    userBlock.setAttribute("aria-label", canEditProfile ? "Editar meu perfil" : "Perfil do usuário");
+    if (canEditProfile) {
+      userBlock.dataset.action = "openPersonDialog";
+      userBlock.dataset.id = currentPersonId();
+    } else {
+      delete userBlock.dataset.action;
+      delete userBlock.dataset.id;
+    }
+  }
+  if (userSettingsIcon) {
+    userSettingsIcon.hidden = !canEditProfile;
+    userSettingsIcon.innerHTML = icons.settings;
   }
 }
 
@@ -1181,16 +1230,7 @@ function renderModuleActions() {
       ? `
         ${sideButton("reports", "Relatórios", icons.report, state.trackerView === "reports")}
         ${sideButton("history", "Histórico", icons.history, state.trackerView === "history")}
-        ${sideButton("team", "Equipe", icons.team, state.trackerView === "team")}`
-      : "";
-    const profileAction = canManageWorkspace()
-      ? `
-        <div class="side-section-title">Perfil</div>
-        <button class="tracker-profile-chip" type="button" data-action="openPersonDialog" data-id="${attr(currentPersonId())}">
-          <span class="tracker-profile-chip-avatar">${initials(state.user?.displayName || "Krio")}</span>
-          <span class="side-label">${esc(state.user?.displayName || "Meu perfil")}</span>
-          <span class="tracker-profile-chip-settings">${icons.settings}</span>
-        </button>`
+        ${sideButton("team", `Equipe${state.accessRequests.length ? `<span class="tracker-head-badge">${state.accessRequests.length}</span>` : ""}`, icons.team, state.trackerView === "team")}`
       : "";
     mount.innerHTML = `
       <nav class="side-nav tracker-side-group" aria-label="Tracker">
@@ -1202,7 +1242,6 @@ function renderModuleActions() {
         <button class="tracker-head-btn primary" type="button" data-action="openAddDemand">
           <span class="side-icon">${icons.plus}</span><span class="side-label">Nova demanda</span>
         </button>
-        ${profileAction}
       </nav>`;
     return;
   }
@@ -1682,23 +1721,38 @@ function renderHistory() {
 
 function renderTeam() {
   if (!canManageWorkspace()) return `<section class="krio-tracker"><div class="tracker-empty">Acesso restrito ao administrador.</div></section>`;
+  const pendingRequests = state.accessRequests;
+  const accessQueue = pendingRequests.length ? `
+    <div class="tracker-list team-assignment-list team-access-list">
+      ${pendingRequests.map((request) => `
+        <div class="tracker-profile-item team-assignment-card team-access-request">
+          <div class="tracker-profile-left">
+            <span class="tracker-profile-dot" style="background:#FBBF24"></span>
+            <div><strong>${esc(request.userName || request.email || "Solicitação")}</strong><span>${esc(request.email || "")} · ${esc(roleRequestLabel(request.role || "member"))}</span></div>
+          </div>
+          <div class="tracker-toolbar">
+            <button class="krio-btn small primary" type="button" data-action="approveAccessRequest" data-uid="${attr(request.uid)}">Aprovar</button>
+            <button class="krio-btn small danger" type="button" data-action="rejectAccessRequest" data-uid="${attr(request.uid)}">Recusar</button>
+          </div>
+        </div>`).join("")}
+    </div>` : `
+    <div class="team-access-empty">
+      <strong>Nenhuma solicitação pendente</strong>
+      <span>Quando um colaborador escolher “Entrar como colaborador” com o email do workspace, o pedido aparece aqui.</span>
+    </div>`;
   return `
     <section class="krio-tracker">
       ${trackerSectionHead("Equipe", "Perfis, acesso e tarefas atribuídas para cada colaborador.", `<button class="krio-btn primary" type="button" data-action="openPersonDialog">${icons.plus} Pessoa</button>`)}
-      ${state.accessRequests.length ? `
-        <div class="tracker-list team-assignment-list">
-          ${state.accessRequests.map((request) => `
-            <div class="tracker-profile-item team-assignment-card">
-              <div class="tracker-profile-left">
-                <span class="tracker-profile-dot" style="background:#FBBF24"></span>
-                <div><strong>${esc(request.userName || request.email || "Solicitação")}</strong><span>${esc(request.email || "")} · ${esc(roleRequestLabel(request.role || "member"))}</span></div>
-              </div>
-              <div class="tracker-toolbar">
-                <button class="krio-btn small primary" type="button" data-action="approveAccessRequest" data-uid="${attr(request.uid)}">Aprovar</button>
-                <button class="krio-btn small danger" type="button" data-action="rejectAccessRequest" data-uid="${attr(request.uid)}">Recusar</button>
-              </div>
-            </div>`).join("")}
-        </div>` : ""}
+      <div class="team-access-panel">
+        <div class="team-access-head">
+          <div>
+            <strong>Solicitações de acesso</strong>
+            <span>Fila de colaboradores aguardando liberação.</span>
+          </div>
+          <span class="team-access-count">${pendingRequests.length}</span>
+        </div>
+        ${accessQueue}
+      </div>
       <div class="tracker-list team-assignment-list">
         ${getProfiles().map((person) => `
           <div class="tracker-profile-item team-assignment-card">

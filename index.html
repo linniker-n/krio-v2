@@ -1594,10 +1594,24 @@ async function requestManualAccess(user,{agencyName='',userName='',source='email
   const currentSnap = await get(requestRef);
   const current = currentSnap.val() || {};
   if(current.status && current.status !== 'pending') return current;
+  const tenant = current.tenantId
+    ? { tenantId: current.tenantId, name: current.agencyName || 'Workspace' }
+    : await findTenantByDomain(user.email);
+  if(!tenant?.tenantId) {
+    return {
+      ...current,
+      status:'blocked',
+      request: {
+        reason: 'Nenhum workspace encontrado para o domínio deste email. Peça para o admin criar o workspace ou liberar seu acesso.'
+      },
+      reason: 'Nenhum workspace encontrado para o domínio deste email. Peça para o admin criar o workspace ou liberar seu acesso.'
+    };
+  }
   const payload = {
     ...current,
     uid: user.uid,
-    agencyName: agencyName || current.agencyName || user.email?.split('@')[1]?.split('.')[0] || 'Minha Agência',
+    tenantId: tenant.tenantId,
+    agencyName: agencyName || current.agencyName || tenant.name || user.email?.split('@')[1]?.split('.')[0] || 'Minha Agência',
     userName: user.displayName || userName || current.userName || 'Usuário',
     email: user.email || current.email || '',
     photoURL: user.photoURL || current.photoURL || '',
@@ -1606,7 +1620,10 @@ async function requestManualAccess(user,{agencyName='',userName='',source='email
     requestedAt: current.requestedAt || now,
     updatedAt: now
   };
-  await set(requestRef,payload);
+  await update(ref(db), {
+    [`accessRequests/${user.uid}`]: payload,
+    [`tenantAccessRequests/${tenant.tenantId}/${user.uid}`]: payload
+  });
   return payload;
 }
 
