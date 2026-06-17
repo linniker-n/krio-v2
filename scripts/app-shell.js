@@ -16,7 +16,7 @@ const views = {
     subtitle: "Leitura operacional em tempo real."
   },
   approval: {
-    title: "Aprovação",
+    title: "Clientes",
     subtitle: "Clientes, peças e retornos centralizados."
   }
 };
@@ -876,6 +876,10 @@ function handleSubmit(event) {
     event.preventDefault();
     savePersonForm(form);
   }
+  if (form.id === "workspaceForm") {
+    event.preventDefault();
+    saveWorkspaceForm(form);
+  }
   if (form.id === "agendaEventForm") {
     event.preventDefault();
     saveAgendaEventForm(form);
@@ -1364,7 +1368,7 @@ function renderModuleActions() {
 
   const clients = getClients();
   mount.innerHTML = `
-    <nav class="side-nav" aria-label="Aprovação">
+    <nav class="side-nav" aria-label="Clientes">
       <div class="side-section-title">Clientes</div>
       ${clients.map((client) => `
         <button class="nav-btn ${state.approvalClientId === client.id ? "active" : ""}" type="button" data-approval-client="${attr(client.id)}">
@@ -1827,6 +1831,19 @@ function renderHistory() {
 function renderTeam() {
   if (!canManageWorkspace()) return `<section class="krio-tracker"><div class="tracker-empty">Acesso restrito ao administrador.</div></section>`;
   const pendingRequests = state.accessRequests;
+  const workspaceName = state.data?.meta?.name || state.tenantMeta?.name || "Workspace Krio";
+  const workspacePanel = `
+    <form id="workspaceForm" class="team-workspace-card">
+      <div class="team-workspace-copy">
+        <span>Workspace</span>
+        <strong>Nome exibido no app</strong>
+        <small>Este nome aparece na sidebar, no perfil e nos convites enviados para a equipe.</small>
+      </div>
+      <div class="team-workspace-actions">
+        <input class="team-workspace-input" name="workspaceName" value="${attr(workspaceName)}" maxlength="80" required aria-label="Nome do workspace">
+        <button class="krio-btn small primary" type="submit">Salvar</button>
+      </div>
+    </form>`;
   const inviteCode = normalizeInviteCode(state.data?.meta?.inviteCode || "");
   const inviteLink = workspaceInviteLink();
   const invitePanel = inviteCode ? `
@@ -1877,6 +1894,7 @@ function renderTeam() {
           </div>
           <span class="team-access-count">${pendingRequests.length}</span>
         </div>
+        ${workspacePanel}
         ${invitePanel}
         ${accessQueue}
       </div>
@@ -2095,7 +2113,7 @@ function renderApproval() {
       <section class="krio-approval">
         <header class="approval-hero">
           <div>
-            <div class="approval-eyebrow">Aprovação criativa</div>
+            <div class="approval-eyebrow">Clientes</div>
             <h2>Clientes e peças</h2>
             <p>${clients.length} cliente(s), ${totalCreatives} peça(s) em acompanhamento.</p>
           </div>
@@ -2212,7 +2230,7 @@ function approvalSectionCopy(status) {
       title: "Postados",
       text: "Histórico de criativos já publicados."
     }
-  }[status] || { title: "Aprovação", text: "Acompanhe o fluxo das peças." };
+  }[status] || { title: "Clientes", text: "Acompanhe o fluxo das peças." };
 }
 
 function renderApprovalStatusView(status, client, groups, creatives) {
@@ -2400,6 +2418,9 @@ function openDemandDialog(id = "", defaults = {}) {
     return;
   }
   const selectedType = existing?.type || (availableDemandTypes.some((type) => type.id === defaults.type) ? defaults.type : availableDemandTypes[0]?.id) || "mensal";
+  const clientOptions = getClients()
+    .map((client) => `<option value="${attr(client.name)}" label="${attr(client.email || client.name)}"></option>`)
+    .join("");
 
   $("#trackerDialogHost").innerHTML = `
     <div class="tracker-dialog-backdrop" data-dialog-backdrop>
@@ -2422,7 +2443,8 @@ function openDemandDialog(id = "", defaults = {}) {
           </div>
           <div class="form-row">
             <label class="tracker-field">Cliente
-              <input class="krio-input" name="client" value="${attr(existing?.client || "")}" placeholder="Cliente">
+              <input class="krio-input" name="client" list="demandClientOptions" value="${attr(existing?.client || "")}" placeholder="Digite ou selecione um cliente">
+              <datalist id="demandClientOptions">${clientOptions}</datalist>
             </label>
             <label class="tracker-field">Prazo
               <input class="krio-input" name="dueDate" type="date" value="${attr(existing?.dueDate || "")}">
@@ -2577,6 +2599,44 @@ function savePersonForm(form) {
   }
   closeDialogs();
   saveAndRender();
+}
+
+async function saveWorkspaceForm(form) {
+  if (!canManageWorkspace()) return;
+  const formData = new FormData(form);
+  const name = String(formData.get("workspaceName") || "").trim();
+  if (!name) return;
+  const slug = slugify(name);
+  const now = Date.now();
+  state.data.meta = {
+    ...(state.data.meta || {}),
+    name,
+    slug,
+    updatedAt: now
+  };
+  state.tenantMeta = state.data.meta;
+  state.data.updatedAt = now;
+  saveLocalState();
+  render();
+
+  if (!state.firebase?.db || state.demoMode || state.tenantId === "local") {
+    setSyncState("online", "Nome do workspace salvo localmente");
+    return;
+  }
+
+  markLocalWrite();
+  try {
+    await state.firebase.update(state.firebase.ref(state.firebase.db), {
+      [`tenants/${state.tenantId}/meta/name`]: name,
+      [`tenants/${state.tenantId}/meta/slug`]: slug,
+      [`tenants/${state.tenantId}/updatedAt`]: now
+    });
+    releaseLocalWrite(true);
+    setSyncState("online", "Nome do workspace atualizado");
+  } catch (error) {
+    releaseLocalWrite(false);
+    setSyncState("offline", "Nao foi possivel salvar o nome do workspace.");
+  }
 }
 
 function deletePerson(id) {
@@ -3153,7 +3213,7 @@ function openPlanDialog(message = "") {
           <article class="tracker-report-card">
             <div>
               <strong>Acesso integral</strong>
-              <span>Tracker, Operação, Aprovação, relatórios e uso contínuo dentro do ambiente liberado para o cliente.</span>
+              <span>Tracker, Operação, Clientes, relatórios e uso contínuo dentro do ambiente liberado para o cliente.</span>
               <div class="tracker-demand-meta" style="margin-top:8px">
                 ${license.features.map((feature) => `<span class="tracker-demand-chip">${esc(featureLabel(feature))}</span>`).join("")}
               </div>
@@ -3217,7 +3277,7 @@ function formatLimit(limit) {
 function featureLabel(feature) {
   return {
     tracker: "Tracker",
-    approval: "Aprovação",
+    approval: "Clientes",
     operations: "Operação",
     reports: "Relatórios",
     manualAccess: "Licença manual"

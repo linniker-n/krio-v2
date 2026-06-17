@@ -50,10 +50,10 @@
         "meta": {
           ".read": "auth != null && root.child('memberships').child(auth.uid).child($tenantId).child('status').val() == 'active'",
           "name": {
-            ".write": "auth != null && root.child('memberships').child(auth.uid).child($tenantId).child('role').val() == 'owner'"
+            ".write": "auth != null && root.child('memberships').child(auth.uid).child($tenantId).child('status').val() == 'active' && (root.child('memberships').child(auth.uid).child($tenantId).child('role').val() == 'owner' || root.child('memberships').child(auth.uid).child($tenantId).child('role').val() == 'admin')"
           },
           "slug": {
-            ".write": "auth != null && root.child('memberships').child(auth.uid).child($tenantId).child('role').val() == 'owner'"
+            ".write": "auth != null && root.child('memberships').child(auth.uid).child($tenantId).child('status').val() == 'active' && (root.child('memberships').child(auth.uid).child($tenantId).child('role').val() == 'owner' || root.child('memberships').child(auth.uid).child($tenantId).child('role').val() == 'admin')"
           },
           "inviteCode": {
             ".write": "auth != null && root.child('memberships').child(auth.uid).child($tenantId).child('status').val() == 'active' && (root.child('memberships').child(auth.uid).child($tenantId).child('role').val() == 'owner' || root.child('memberships').child(auth.uid).child($tenantId).child('role').val() == 'admin')"

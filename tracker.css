@@ -1288,7 +1288,8 @@ select.krio-input option {
   font-variant-numeric: tabular-nums;
 }
 
-.team-invite-card {
+.team-invite-card,
+.team-workspace-card {
   display: grid;
   grid-template-columns: minmax(180px, 0.8fr) minmax(0, 1.2fr);
   gap: 12px;
@@ -1299,13 +1300,15 @@ select.krio-input option {
   background: rgba(255,255,255,0.04);
 }
 
-.team-invite-copy {
+.team-invite-copy,
+.team-workspace-copy {
   display: grid;
   gap: 3px;
   min-width: 0;
 }
 
-.team-invite-copy span {
+.team-invite-copy span,
+.team-workspace-copy span {
   color: var(--muted-2);
   font-size: 9px;
   font-weight: 900;
@@ -1313,7 +1316,8 @@ select.krio-input option {
   text-transform: uppercase;
 }
 
-.team-invite-copy strong {
+.team-invite-copy strong,
+.team-workspace-copy strong {
   color: var(--text);
   font-size: 18px;
   font-weight: 900;
@@ -1322,13 +1326,15 @@ select.krio-input option {
   font-variant-numeric: tabular-nums;
 }
 
-.team-invite-copy small {
+.team-invite-copy small,
+.team-workspace-copy small {
   color: var(--muted);
   font-size: 11px;
   line-height: 1.4;
 }
 
-.team-invite-actions {
+.team-invite-actions,
+.team-workspace-actions {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px;
@@ -1336,7 +1342,8 @@ select.krio-input option {
   min-width: 0;
 }
 
-.team-invite-input {
+.team-invite-input,
+.team-workspace-input {
   width: 100%;
   min-width: 0;
   height: 30px;
@@ -2405,7 +2412,9 @@ select.krio-input option {
   .tracker-stat-strip { grid-template-columns: repeat(3, 1fr); }
   .team-assignment-card { grid-template-columns: 1fr; }
   .team-invite-card,
-  .team-invite-actions { grid-template-columns: 1fr; }
+  .team-invite-actions,
+  .team-workspace-card,
+  .team-workspace-actions { grid-template-columns: 1fr; }
   .agenda-year-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 
