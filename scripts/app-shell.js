@@ -1444,9 +1444,6 @@ function renderModuleActions() {
       ${ungroupedClients.length && folders.length ? `<div class="side-section-title compact">Soltos</div>` : ""}
       ${ungroupedClients.map(renderClientNavButton).join("")}
       ${!clients.length ? `<div class="approval-side-empty">Nenhum cliente cadastrado.</div>` : ""}
-      <button class="nav-btn" type="button" data-action="openClientFolderDialog">
-        <span class="side-icon">${icons.plus}</span><span class="side-label">Novo grupo</span>
-      </button>
       <button class="nav-btn" type="button" data-action="openClientDialog">
         <span class="side-icon">${icons.plus}</span><span class="side-label">Novo cliente</span>
       </button>
