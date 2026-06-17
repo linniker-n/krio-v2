@@ -37,6 +37,12 @@
         }
       }
     },
+    "tenantInvites": {
+      "$code": {
+        ".read": "auth != null",
+        ".write": "auth != null && newData.hasChildren(['code', 'tenantId', 'name', 'status', 'ownerUid']) && newData.child('code').val() == $code && ((newData.child('tenantId').val() == 'tenant_' + auth.uid && newData.child('ownerUid').val() == auth.uid && (!data.exists() || data.child('ownerUid').val() == auth.uid)) || (root.child('memberships').child(auth.uid).child(newData.child('tenantId').val()).child('status').val() == 'active' && (root.child('memberships').child(auth.uid).child(newData.child('tenantId').val()).child('role').val() == 'owner' || root.child('memberships').child(auth.uid).child(newData.child('tenantId').val()).child('role').val() == 'admin')))"
+      }
+    },
     "tenants": {
       "$tenantId": {
         ".read": false,
@@ -48,6 +54,12 @@
           },
           "slug": {
             ".write": "auth != null && root.child('memberships').child(auth.uid).child($tenantId).child('role').val() == 'owner'"
+          },
+          "inviteCode": {
+            ".write": "auth != null && root.child('memberships').child(auth.uid).child($tenantId).child('status').val() == 'active' && (root.child('memberships').child(auth.uid).child($tenantId).child('role').val() == 'owner' || root.child('memberships').child(auth.uid).child($tenantId).child('role').val() == 'admin')"
+          },
+          "inviteUpdatedAt": {
+            ".write": "auth != null && root.child('memberships').child(auth.uid).child($tenantId).child('status').val() == 'active' && (root.child('memberships').child(auth.uid).child($tenantId).child('role').val() == 'owner' || root.child('memberships').child(auth.uid).child($tenantId).child('role').val() == 'admin')"
           },
           "plan": {
             ".write": false

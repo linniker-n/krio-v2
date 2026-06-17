@@ -353,6 +353,7 @@ async function loadTenantForUser(user) {
   state.tenantMeta = tenant.meta || {};
   const localCopy = loadLocalState();
   state.data = normalizeTenant(localCopy || tenant, user);
+  await ensureWorkspaceInviteCode();
 
   if (!asArray(tenant.tracker?.weeks).length || localCopy) {
     await persistNow();
@@ -367,9 +368,10 @@ async function registerAccessRequestFromApp(user) {
   const requestSnap = await fb.get(requestRef);
   const current = requestSnap.val() || {};
   if (current.status && current.status !== "pending") return;
+  const inviteTenant = await findTenantByInviteCode(current.inviteCode || new URLSearchParams(window.location.search).get("invite") || "", new URLSearchParams(window.location.search).get("workspace") || "");
   const tenant = current.tenantId
     ? { tenantId: current.tenantId, name: current.agencyName || "Workspace" }
-    : await findTenantByEmailDomain(user.email);
+    : inviteTenant || await findTenantByEmailDomain(user.email);
   const tenantId = tenant?.tenantId || "";
   const agencyName = current.agencyName || tenant?.name || user.email?.split("@")[1]?.split(".")[0] || "Minha Agência";
   if (!tenantId) return;
@@ -380,6 +382,7 @@ async function registerAccessRequestFromApp(user) {
     agencyName,
     userName: user.displayName || user.email?.split("@")[0] || "Usuário",
     email: user.email || "",
+    inviteCode: tenant?.inviteCode || current.inviteCode || "",
     status: "pending",
     source: "app",
     requestedAt: current.requestedAt || now,
@@ -403,12 +406,112 @@ async function findTenantByEmailDomain(email = "") {
   return { tenantId: entries[0][0], ...(entries[0][1] || {}) };
 }
 
+async function findTenantByInviteCode(inviteCode = "", workspaceId = "") {
+  const fb = state.firebase;
+  const code = normalizeInviteCode(inviteCode);
+  const workspace = normalizeWorkspaceId(workspaceId) || inviteWorkspaceFromValue(inviteCode);
+  if (workspace) return { tenantId: workspace, name: "Workspace", inviteCode: code };
+  if (!fb?.db || !code) return null;
+  try {
+    const snap = await fb.get(fb.ref(fb.db, `tenantInvites/${code}`));
+    const invite = snap.val() || {};
+    if (!snap.exists() || invite.status !== "active" || !invite.tenantId) return null;
+    return { ...invite, inviteCode: code };
+  } catch (error) {
+    return null;
+  }
+}
+
 function domainKey(email = "") {
   return pathKey(String(email || "").trim().toLowerCase().split("@")[1] || "");
 }
 
 function pathKey(value = "") {
   return String(value || "").trim().replace(/[.#$\[\]\/]/g, "_");
+}
+
+function normalizeWorkspaceId(value = "") {
+  const id = String(value || "").trim();
+  return /^tenant_[A-Za-z0-9_-]+$/.test(id) ? id : "";
+}
+
+function inviteWorkspaceFromValue(value = "") {
+  const raw = String(value || "").trim();
+  try {
+    if (/^https?:\/\//i.test(raw)) return normalizeWorkspaceId(new URL(raw).searchParams.get("workspace") || "");
+  } catch (error) {}
+  const queryMatch = raw.match(/[?&]workspace=([^&#]+)/i);
+  return queryMatch ? normalizeWorkspaceId(decodeURIComponent(queryMatch[1] || "")) : "";
+}
+
+async function ensureWorkspaceInviteCode() {
+  if (!canManageWorkspace() || !state.data?.meta) return "";
+  const existing = normalizeInviteCode(state.data.meta.inviteCode || "");
+  const code = existing || generateInviteCode(state.data.meta.name || "KRIO");
+  const now = Date.now();
+  state.data.meta.inviteCode = code;
+  state.tenantMeta = state.data.meta;
+
+  if (!state.firebase?.db || state.demoMode || state.tenantId === "local") return code;
+
+  const invitePayload = workspaceInvitePayload(code, now);
+  const updates = {
+    [`tenantInvites/${code}`]: invitePayload
+  };
+  if (!existing) {
+    updates[`tenants/${state.tenantId}/meta/inviteCode`] = code;
+    updates[`tenants/${state.tenantId}/meta/inviteUpdatedAt`] = now;
+  }
+
+  try {
+    await state.firebase.update(state.firebase.ref(state.firebase.db), updates);
+  } catch (error) {
+    // The invite link also carries the workspace id, so this index is optional.
+  }
+  return code;
+}
+
+function workspaceInvitePayload(code, now = Date.now()) {
+  const meta = state.data?.meta || state.tenantMeta || {};
+  return {
+    code,
+    tenantId: state.tenantId,
+    name: meta.name || "Workspace Krio",
+    slug: meta.slug || slugify(meta.name || "workspace"),
+    ownerUid: meta.ownerUid || state.user?.uid || "",
+    status: "active",
+    updatedAt: now,
+    createdAt: meta.inviteUpdatedAt || meta.createdAt || now
+  };
+}
+
+function normalizeInviteCode(value = "") {
+  let raw = String(value || "").trim();
+  if (!raw) return "";
+  try {
+    if (/^https?:\/\//i.test(raw)) raw = new URL(raw).searchParams.get("invite") || raw;
+  } catch (error) {}
+  const queryMatch = raw.match(/[?&]invite=([^&#]+)/i);
+  if (queryMatch) raw = decodeURIComponent(queryMatch[1] || "");
+  return raw.toUpperCase().replace(/[^A-Z0-9-]/g, "").replace(/-+/g, "-").replace(/(^-|-$)/g, "");
+}
+
+function generateInviteCode(seed = "KRIO") {
+  const prefix = slugify(seed).replace(/-/g, "").slice(0, 4).toUpperCase() || "KRIO";
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let suffix = "";
+  const values = new Uint32Array(5);
+  if (crypto?.getRandomValues) crypto.getRandomValues(values);
+  for (let index = 0; index < 5; index += 1) {
+    const value = values[index] || Math.floor(Math.random() * alphabet.length);
+    suffix += alphabet[value % alphabet.length];
+  }
+  return `${prefix}-${suffix}`;
+}
+
+function workspaceInviteLink() {
+  const code = normalizeInviteCode(state.data?.meta?.inviteCode || "");
+  return code ? `${window.location.origin}/?invite=${encodeURIComponent(code)}&workspace=${encodeURIComponent(state.tenantId)}` : "";
 }
 
 function finishBoot() {
@@ -680,6 +783,7 @@ function handleClick(event) {
     deletePerson: () => deletePerson(button.dataset.id),
     approveAccessRequest: () => approveAccessRequest(button.dataset.uid),
     rejectAccessRequest: () => rejectAccessRequest(button.dataset.uid),
+    copyInviteLink: () => copyWorkspaceInvite(workspaceInviteLink(), "Link de convite copiado"),
     togglePersonDemandType: () => togglePersonDemandType(button.dataset.person, button.dataset.type, button),
     setColorValue: () => setColorValue(button),
     agendaPrev: () => moveAgenda(-1),
@@ -743,6 +847,7 @@ function canRunAction(action, button) {
     "deletePerson",
     "approveAccessRequest",
     "rejectAccessRequest",
+    "copyInviteLink",
     "togglePersonDemandType",
     "openPlanDialog",
     "exportTracker",
@@ -1722,6 +1827,27 @@ function renderHistory() {
 function renderTeam() {
   if (!canManageWorkspace()) return `<section class="krio-tracker"><div class="tracker-empty">Acesso restrito ao administrador.</div></section>`;
   const pendingRequests = state.accessRequests;
+  const inviteCode = normalizeInviteCode(state.data?.meta?.inviteCode || "");
+  const inviteLink = workspaceInviteLink();
+  const invitePanel = inviteCode ? `
+    <div class="team-invite-card">
+      <div class="team-invite-copy">
+        <span>Convite do workspace</span>
+        <strong>${esc(inviteCode)}</strong>
+        <small>Envie este link para qualquer colaborador, mesmo com Gmail pessoal.</small>
+      </div>
+      <div class="team-invite-actions">
+        <input class="team-invite-input" value="${attr(inviteLink)}" readonly aria-label="Link de convite">
+        <button class="krio-btn small primary" type="button" data-action="copyInviteLink">Copiar link</button>
+      </div>
+    </div>` : `
+    <div class="team-invite-card">
+      <div class="team-invite-copy">
+        <span>Convite do workspace</span>
+        <strong>Gerando convite...</strong>
+        <small>Atualize a tela em instantes caso o codigo ainda nao apareca.</small>
+      </div>
+    </div>`;
   const accessQueue = pendingRequests.length ? `
     <div class="tracker-list team-assignment-list team-access-list">
       ${pendingRequests.map((request) => `
@@ -1738,7 +1864,7 @@ function renderTeam() {
     </div>` : `
     <div class="team-access-empty">
       <strong>Nenhuma solicitação pendente</strong>
-      <span>Quando um colaborador escolher “Entrar como colaborador” com o email do workspace, o pedido aparece aqui.</span>
+      <span>Quando um colaborador usar o link de convite do workspace, o pedido aparece aqui.</span>
     </div>`;
   return `
     <section class="krio-tracker">
@@ -1751,6 +1877,7 @@ function renderTeam() {
           </div>
           <span class="team-access-count">${pendingRequests.length}</span>
         </div>
+        ${invitePanel}
         ${accessQueue}
       </div>
       <div class="tracker-list team-assignment-list">
@@ -3191,6 +3318,29 @@ async function grantWorkspaceMembership(uid, role = "member") {
   }
 }
 
+async function copyWorkspaceInvite(value, successMessage) {
+  const text = String(value || "").trim();
+  if (!text) {
+    setSyncState("offline", "Convite ainda nao disponivel.");
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(text);
+    setSyncState("online", successMessage);
+  } catch (error) {
+    const input = document.createElement("textarea");
+    input.value = text;
+    input.setAttribute("readonly", "");
+    input.style.position = "fixed";
+    input.style.left = "-9999px";
+    document.body.appendChild(input);
+    input.select();
+    const copied = document.execCommand("copy");
+    input.remove();
+    setSyncState(copied ? "online" : "offline", copied ? successMessage : "Nao foi possivel copiar o convite.");
+  }
+}
+
 function closeDialogs() {
   $("#trackerDialogHost").innerHTML = "";
   $("#approvalDialogHost").innerHTML = "";
@@ -4147,6 +4297,9 @@ function seedData(user) {
   return {
     meta: {
       name: "Workspace Krio",
+      slug: "workspace-krio",
+      inviteCode: "KRIO-DEMO1",
+      inviteUpdatedAt: Date.now(),
       plan: "manual_license",
       licenseStatus: "active",
       licenseType: "direct_sale",
