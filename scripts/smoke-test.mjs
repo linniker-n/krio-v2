@@ -3,6 +3,7 @@ import { once } from "node:events";
 import { chromium } from "playwright";
 
 const rootUrl = process.env.KRIO_SMOKE_URL || "http://127.0.0.1:8000";
+const appSmokePath = process.env.KRIO_SMOKE_URL ? "/app" : "/app/index.html";
 let server;
 
 if (!process.env.KRIO_SMOKE_URL) {
@@ -41,7 +42,7 @@ async function desktopSmoke(browser) {
   await page.locator("#tabLogin").click();
   await page.locator("#loginForm").waitFor({ state: "visible" });
 
-  await page.goto(`${rootUrl}/app/?demo=1`, { waitUntil: "networkidle" });
+  await page.goto(`${rootUrl}${appSmokePath}?demo=1`, { waitUntil: "networkidle" });
   await page.locator("#appShell").waitFor({ state: "visible" });
   await page.locator('[data-action="openPlanDialog"]').first().click();
   await page.locator("#planDialogTitle").waitFor({ state: "visible" });
@@ -57,7 +58,7 @@ async function mobileSmoke(browser) {
   const page = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true });
   const errors = collectErrors(page);
 
-  await page.goto(`${rootUrl}/app/?demo=1`, { waitUntil: "networkidle" });
+  await page.goto(`${rootUrl}${appSmokePath}?demo=1`, { waitUntil: "networkidle" });
   await page.locator("#appShell").waitFor({ state: "visible" });
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   await page.close();

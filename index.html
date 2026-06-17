@@ -1707,7 +1707,7 @@ async function renderSession(user, access){
 async function enterIfActive(user,context={}){
   const access = await resolveAccess(user,context);
   if(access.status === 'active'){
-    window.location.href = '/app/';
+    window.location.href = '/app';
     return true;
   }
   await renderSession(user,access);
@@ -1788,7 +1788,7 @@ workspaceRecoveryForm.addEventListener('submit', async (e) => {
       agencyName,
       userName: user.displayName || user.email?.split('@')[0] || ''
     });
-    window.location.href = '/app/';
+    window.location.href = '/app';
   } catch(error) {
     showMessage(mapAuthError(error));
   } finally {
