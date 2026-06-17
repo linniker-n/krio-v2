@@ -70,6 +70,29 @@ body {
   position: relative;
 }
 
+.skip-link {
+  position: fixed;
+  top: 0;
+  left: 16px;
+  z-index: 9999;
+  transform: translateY(-120%);
+  padding: 8px 16px;
+  background: var(--brand);
+  color: #fff;
+  border-radius: var(--r-md);
+  font-size: 13px;
+  font-weight: 700;
+  text-decoration: none;
+  transition: transform 160ms var(--ease-out);
+}
+
+.skip-link:focus,
+.skip-link:focus-visible {
+  transform: translateY(16px);
+  outline: 2px solid rgba(255,255,255,0.72);
+  outline-offset: 3px;
+}
+
 /* Grain overlay */
 body::before {
   content: "";
