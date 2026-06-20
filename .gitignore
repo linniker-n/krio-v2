@@ -15,3 +15,16 @@ test-results/
 playwright-report/
 *.local
 *.zip
+
+# Arquivos internos — não subir para repositório público
+database.rules.json
+scripts/*.ps1
+scripts/smoke-test.mjs
+"Relatório de Auditoria e Planejamento de Lançamento — Krio V2.md"
+GO_LIVE.md
+PRODUCTIZATION.md
+firebase-rules.example.json
+cors.json
+popp-tracker-firebase.html
+APROVAÇÃO.html
+Operação.html

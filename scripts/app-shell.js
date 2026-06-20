@@ -3,10 +3,15 @@ const firebaseConfig = {
   authDomain: "krio-app-fe0c3.firebaseapp.com",
   databaseURL: "https://krio-app-fe0c3-default-rtdb.firebaseio.com",
   projectId: "krio-app-fe0c3",
+  storageBucket: "krio-app-fe0c3.appspot.com",
   appId: "1:527271527417:web:f320fac3656b6914ae3328"
 };
 
 const views = {
+  dashboard: {
+    title: "Dashboard",
+    subtitle: "Visao geral, aprovacoes e gargalos da agencia."
+  },
   tracker: {
     title: "Tracker",
     subtitle: "Demandas, semanas e produção da equipe."
@@ -38,6 +43,14 @@ const demandTypes = [
   { id: "planejamento", label: "Planejamento" }
 ];
 
+const workspaceAccessRoles = [
+  { id: "admin", label: "Gestão — acesso integral" },
+  { id: "creator", label: "Criador — dashboard e Tracker" },
+  { id: "operations", label: "Operação — agenda, relatórios, histórico e clientes" }
+];
+
+const validAccessRoles = new Set(["owner", "admin", "member", "creator", "operations", "client", "guest"]);
+
 const agendaEventTypes = [
   { id: "meeting", label: "Reunião" },
   { id: "delivery", label: "Entrega" },
@@ -48,7 +61,7 @@ const agendaEventTypes = [
 const approvalStatuses = {
   prov: "Provisório",
   internalApproved: "Aprovado internamente",
-  internalRejected: "Reprovado internamente",
+  internalRejected: "Refação",
   clientReview: "Quadro do cliente",
   scheduled: "Agendamento",
   posted: "Postados",
@@ -69,6 +82,8 @@ const approvalStatusAliases = {
   post: "posted",
 };
 
+const appRoute = parseAppRoute();
+
 const state = {
   firebase: null,
   user: null,
@@ -76,7 +91,9 @@ const state = {
   membership: { role: "owner", status: "active" },
   tenantMeta: {},
   data: null,
-  activeView: "tracker",
+  route: appRoute,
+  portalIndex: null,
+  activeView: appRoute.mode === "clientPortal" ? "approval" : "dashboard",
   trackerView: "week",
   trackerFilter: "all",
   currentWeekIndex: 0,
@@ -137,6 +154,20 @@ async function boot() {
   }
 
   state.firebase = await loadFirebase();
+  if (isClientPortalRoute()) {
+    if (!state.firebase) {
+      failClosed("Não foi possível carregar o portal do cliente. Verifique o link e tente novamente.");
+      return;
+    }
+    try {
+      await loadClientPortalForRoute();
+      finishClientPortalBoot();
+    } catch (error) {
+      failClosed("Não encontramos peças para este link de aprovação.");
+    }
+    return;
+  }
+
   if (!state.firebase) {
     if (!isLocalFallbackAllowed()) {
       failClosed("Não foi possível validar seu acesso. Verifique a conexão e tente novamente.");
@@ -187,6 +218,43 @@ function isLocalFallbackAllowed() {
     || host === "";
 }
 
+function parseAppRoute() {
+  const match = window.location.pathname.match(/\/approval\/([^/?#]+)/);
+  return match
+    ? { mode: "clientPortal", clientId: decodeURIComponent(match[1]) }
+    : { mode: "app", clientId: "" };
+}
+
+function isClientPortalRoute() {
+  return state?.route?.mode === "clientPortal";
+}
+
+function isClientAccessRole(role = currentAccessRole()) {
+  return ["client", "guest"].includes(role);
+}
+
+function isCreatorAccessRole(role = currentAccessRole()) {
+  return ["creator", "member"].includes(role);
+}
+
+function isOperationsAccessRole(role = currentAccessRole()) {
+  return role === "operations";
+}
+
+function isClientExperience() {
+  return isClientPortalRoute() || isClientAccessRole();
+}
+
+function defaultModuleForRole() {
+  if (isClientAccessRole()) return "approval";
+  if (isOperationsAccessRole()) return "tracker";
+  return "dashboard";
+}
+
+function defaultTrackerView() {
+  return isOperationsAccessRole() ? "agenda" : "week";
+}
+
 function failClosed(message) {
   const loading = $("#loadingState");
   const shell = $("#appShell");
@@ -203,7 +271,7 @@ function failClosed(message) {
 }
 
 function normalizeMembership(membership = {}) {
-  const role = ["owner", "admin", "member"].includes(membership.role) ? membership.role : "member";
+  const role = validAccessRoles.has(membership.role) ? membership.role : "member";
   return {
     ...membership,
     role,
@@ -212,6 +280,7 @@ function normalizeMembership(membership = {}) {
 }
 
 function currentAccessRole() {
+  if (isClientPortalRoute()) return "client";
   if (state.demoMode || state.tenantId === "local") return "owner";
   return normalizeMembership(state.membership).role;
 }
@@ -220,14 +289,43 @@ function canManageWorkspace() {
   return ["owner", "admin"].includes(currentAccessRole());
 }
 
+function canEditAgenda() {
+  return canManageWorkspace() || isCreatorAccessRole();
+}
+
+function canManageDemand(personId) {
+  return canManageWorkspace() || (isCreatorAccessRole() && personId === currentPersonId());
+}
+
+function isCreatorProfile(person = {}) {
+  const accessRole = validAccessRoles.has(person.accessRole) ? person.accessRole : "";
+  const jobRole = String(person.role || "").trim().toLocaleLowerCase("pt-BR");
+  const isManagementOrOperations = /owner|admin|gestão|gestao|operaç|operac/.test(jobRole);
+  if (accessRole === "creator") return true;
+  if (accessRole === "member") return !isManagementOrOperations;
+  if (["owner", "admin", "operations", "client", "guest"].includes(accessRole)) return false;
+
+  if (isManagementOrOperations) return false;
+  return true;
+}
+
+function normalizeAssignableAccessRole(role) {
+  return workspaceAccessRoles.some((item) => item.id === role) ? role : "creator";
+}
+
 function canAccessModule(view) {
-  if (view === "operations") return canManageWorkspace();
-  return ["tracker", "approval"].includes(view);
+  if (isClientExperience()) return view === "approval";
+  if (view === "dashboard") return canManageWorkspace() || isCreatorAccessRole();
+  if (view === "operations") return canManageWorkspace() || isOperationsAccessRole();
+  if (view === "approval") return canManageWorkspace();
+  return view === "tracker";
 }
 
 function canAccessTrackerView(view) {
-  if (["week", "agenda", "trash"].includes(view)) return true;
-  return canManageWorkspace();
+  if (canManageWorkspace()) return ["week", "refaction", "agenda", "clients", "reports", "history", "team", "trash"].includes(view);
+  if (isOperationsAccessRole()) return ["agenda", "clients", "reports", "history"].includes(view);
+  if (isCreatorAccessRole()) return ["week", "refaction", "agenda", "trash"].includes(view);
+  return false;
 }
 
 function currentPersonId() {
@@ -238,11 +336,38 @@ function currentPersonId() {
 }
 
 function canViewPerson(personId) {
-  return canManageWorkspace() || personId === currentPersonId();
+  return canManageWorkspace() || isOperationsAccessRole() || personId === currentPersonId();
+}
+
+function resolveClientApprovalId() {
+  if (!state.data?.approval?.clients) return null;
+  const membership = normalizeMembership(state.membership);
+  const candidates = [
+    state.route?.clientId,
+    state.approvalClientId,
+    state.portalIndex?.clientId,
+    membership.clientId,
+    membership.approvalClientId
+  ].filter(Boolean);
+
+  const direct = candidates.find((id) => getClient(id));
+  if (direct) return direct;
+
+  const email = String(state.user?.email || "").trim().toLowerCase();
+  if (email) {
+    const byEmail = getClients().find((client) => String(client.email || "").trim().toLowerCase() === email);
+    if (byEmail) return byEmail.id;
+  }
+
+  return getClients()[0]?.id || null;
 }
 
 function getVisibleProfiles() {
-  return getProfiles().filter((person) => canViewPerson(person.id));
+  return getCreatorProfiles().filter((person) => canViewPerson(person.id));
+}
+
+function getCreatorProfiles() {
+  return getProfiles().filter((person) => isCreatorProfile(person));
 }
 
 function defaultAssignedDemandTypes() {
@@ -287,16 +412,22 @@ function flattenTrash(value, ownerUid = "") {
 
 async function loadFirebase() {
   try {
-    const [firebaseApp, firebaseAuth, firebaseDatabase] = await Promise.all([
+    const [firebaseApp, firebaseAuth, firebaseDatabase, firebaseStorage] = await Promise.all([
       import("https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js"),
       import("https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js"),
-      import("https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js")
+      import("https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js"),
+      import("https://www.gstatic.com/firebasejs/10.12.0/firebase-storage.js")
     ]);
     const app = firebaseApp.initializeApp(firebaseConfig);
+    const storage = firebaseStorage.getStorage(app);
     return {
       app,
       auth: firebaseAuth.getAuth(app),
       db: firebaseDatabase.getDatabase(app),
+      storage,
+      storageRef: firebaseStorage.ref,
+      uploadBytes: firebaseStorage.uploadBytes,
+      getDownloadURL: firebaseStorage.getDownloadURL,
       onAuthStateChanged: firebaseAuth.onAuthStateChanged,
       signOut: firebaseAuth.signOut,
       ref: firebaseDatabase.ref,
@@ -308,6 +439,18 @@ async function loadFirebase() {
     };
   } catch (error) {
     return null;
+  }
+}
+
+async function uploadFileToStorage(file, path) {
+  const fb = state.firebase;
+  if (!fb?.storage || !file?.size) return "";
+  try {
+    const storageRef = fb.storageRef(fb.storage, path);
+    const snapshot = await fb.uploadBytes(storageRef, file);
+    return await fb.getDownloadURL(snapshot.ref);
+  } catch {
+    return "";
   }
 }
 
@@ -360,6 +503,50 @@ async function loadTenantForUser(user) {
   if (!asArray(tenant.tracker?.weeks).length || localCopy) {
     await persistNow();
   }
+}
+
+async function loadClientPortalForRoute() {
+  const clientId = state.route.clientId;
+  if (!clientId) throw new Error("portal-missing");
+  const fb = state.firebase;
+  const portalSnap = await fb.get(fb.ref(fb.db, `approvalPortals/${clientId}`));
+  const portal = portalSnap.val() || {};
+  const tenantId = portal.tenantId || "";
+  const portalClientId = portal.clientId || clientId;
+  if (!tenantId || !portalClientId) throw new Error("portal-missing");
+
+  const clientSnap = await fb.get(fb.ref(fb.db, `tenants/${tenantId}/approval/clients/${portalClientId}`));
+  if (!clientSnap.exists()) throw new Error("client-missing");
+
+  const client = normalizeApprovalClient(clientSnap.val(), portalClientId);
+  state.tenantId = tenantId;
+  state.approvalClientId = portalClientId;
+  state.portalIndex = {
+    ...portal,
+    tenantId,
+    clientId: portalClientId,
+    workspaceName: portal.workspaceName || "Krio"
+  };
+  state.membership = { role: "client", status: "active" };
+  state.user = {
+    uid: `guest_${portalClientId}`,
+    displayName: client.name || portal.clientName || "Cliente",
+    email: client.email || ""
+  };
+  state.tenantMeta = {
+    name: portal.workspaceName || "Krio"
+  };
+  state.data = {
+    meta: state.tenantMeta,
+    billing: {},
+    profiles: {},
+    tracker: { weeks: [], events: [], trash: [] },
+    approval: {
+      clients: {
+        [portalClientId]: client
+      }
+    }
+  };
 }
 
 async function registerAccessRequestFromApp(user) {
@@ -507,7 +694,17 @@ function workspaceInviteLink() {
 }
 
 function finishBoot() {
+  if (isClientPortalRoute()) {
+    finishClientPortalBoot();
+    return;
+  }
   state.tenantMeta = state.data.meta || {};
+  state.activeView = defaultModuleForRole();
+  if (isClientAccessRole()) {
+    state.approvalStatus = "clientReview";
+    state.approvalClientId = resolveClientApprovalId();
+  }
+  state.trackerView = defaultTrackerView();
   const localWeek = currentWeek();
   state.currentWeekIndex = Math.max(0, state.data.tracker.weeks.indexOf(localWeek));
   render();
@@ -515,6 +712,53 @@ function finishBoot() {
   $("#appShell").hidden = false;
   setupRealtimeSync();
   startTimerTick();
+  checkConnectionLimit();
+}
+
+function finishClientPortalBoot() {
+  state.membership = { role: "client", status: "active" };
+  state.activeView = "approval";
+  state.approvalStatus = "clientReview";
+  state.approvalClientId = resolveClientApprovalId();
+  state.tenantMeta = state.data?.meta || state.tenantMeta || {};
+  render();
+  $("#loadingState").hidden = true;
+  $("#appShell").hidden = false;
+  setupClientPortalSync();
+}
+
+function setupClientPortalSync() {
+  stopRealtimeSync();
+  if (!state.firebase?.db || state.demoMode || state.tenantId === "local" || !state.approvalClientId) return;
+
+  const fb = state.firebase;
+  const path = `tenants/${state.tenantId}/approval/clients/${state.approvalClientId}`;
+  const unsubscribe = fb.onValue(
+    fb.ref(fb.db, path),
+    (snapshot) => {
+      const client = snapshot.val();
+      if (!client) return;
+      state.data.approval.clients[state.approvalClientId] = normalizeApprovalClient(client, state.approvalClientId);
+      render();
+      setSyncState("online", "Portal atualizado");
+    },
+    () => setSyncState("offline", "Portal indisponível")
+  );
+  state.realtimeUnsubs.push(unsubscribe);
+}
+
+function checkConnectionLimit() {
+  if (!canManageWorkspace()) return;
+  const profileCount = getProfiles().length;
+  if (profileCount < 8) return;
+  const existing = document.getElementById("connectionLimitBanner");
+  if (existing) return;
+  const banner = document.createElement("div");
+  banner.id = "connectionLimitBanner";
+  banner.style.cssText = "display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 20px;background:rgba(217,119,6,0.12);border-bottom:1px solid rgba(217,119,6,0.25);font-size:12px;color:#D97706;z-index:200;position:relative;";
+  banner.innerHTML = `<span><strong>Atenção:</strong> Workspace com ${profileCount} membros. O plano Spark suporta até 100 conexões simultâneas. Considere migrar para o plano Blaze conforme o crescimento da equipe.</span><button type="button" aria-label="Fechar aviso" style="background:none;border:none;cursor:pointer;color:#D97706;font-size:16px;line-height:1;padding:0 4px;">✕</button>`;
+  banner.querySelector("button").onclick = () => banner.remove();
+  document.querySelector(".app-topbar")?.after(banner);
 }
 
 function setupRealtimeSync() {
@@ -615,7 +859,7 @@ function setupRealtimeSync() {
         }
         scheduleRealtimeRender("Atualizado em tempo real");
       },
-      () => setSyncState("offline", "Tempo real indisponivel")
+      () => setSyncState("offline", "Tempo real indisponível")
     );
     state.realtimeUnsubs.push(unsubscribe);
   });
@@ -765,7 +1009,10 @@ function handleClick(event) {
     nextWeek: () => moveWeek(1),
     newWeek: createNextWeek,
     deleteWeek: () => deleteCurrentWeek(),
-    openAddDemand: () => openDemandDialog("", { personId: button.dataset.person || currentPersonId(), type: button.dataset.type }),
+    openAddDemand: () => openDemandDialog("", {
+      personId: button.dataset.person || (canManageWorkspace() ? getVisibleProfiles()[0]?.id : currentPersonId()),
+      type: button.dataset.type
+    }),
     editDemand: () => openDemandDialog(button.dataset.id),
     toggleDemand: () => toggleDemand(button.dataset.id),
     deleteDemand: () => deleteDemand(button.dataset.id),
@@ -778,6 +1025,33 @@ function handleClick(event) {
     resetTime: () => resetDemandTime(button.dataset.id),
     openDemandNote: () => openDemandNoteDialog(button.dataset.id),
     cycleDifficulty: () => cycleDemandDifficulty(button.dataset.id, button),
+    openDashboard: () => {
+      state.activeView = "dashboard";
+      render();
+    },
+    openTracker: () => {
+      state.activeView = "tracker";
+      state.trackerView = defaultTrackerView();
+      render();
+    },
+    openApprovalModule: () => {
+      state.activeView = "approval";
+      render();
+    },
+    openClientManagement: () => {
+      state.activeView = "tracker";
+      state.trackerView = "clients";
+      render();
+    },
+    openBriefingDialog: () => openBriefingDialog(button.dataset.client || ""),
+    copyClientPortalLink: () => copyClientPortalLink(button.dataset.client || ""),
+    toggleDemandMenu: () => {
+      const article = button.closest(".tracker-demand-item");
+      if (!article) return;
+      const isOpen = article.hasAttribute("data-menu-open");
+      document.querySelectorAll(".tracker-demand-item[data-menu-open]").forEach((el) => el.removeAttribute("data-menu-open"));
+      if (!isOpen) article.setAttribute("data-menu-open", "");
+    },
     openPersonDialog: () => openPersonDialog(button.dataset.id),
     deletePerson: () => deletePerson(button.dataset.id),
     approveAccessRequest: () => approveAccessRequest(button.dataset.uid),
@@ -821,6 +1095,7 @@ function handleClick(event) {
     openCreativeDetail: () => openCreativeDetail(button.dataset.id),
     deleteCreative: () => deleteCreative(button.dataset.id),
     setCreativeStatus: () => setCreativeStatus(button.dataset.id, button.dataset.status),
+    openInternalRejectionDialog: () => openInternalRejectionDialog(button.dataset.id),
     sendToClientBoard: () => sendToClientBoard(button.dataset.id),
     clientApproveCreative: () => clientApproveCreative(button.dataset.id),
     openClientRejectionDialog: () => openClientRejectionDialog(button.dataset.id),
@@ -855,6 +1130,8 @@ function canRunAction(action, button) {
     "exportTracker",
     "printTracker",
     "openClientDialog",
+    "openClientManagement",
+    "openBriefingDialog",
     "deleteClient",
     "openClientFolderDialog",
     "deleteClientFolder",
@@ -862,8 +1139,14 @@ function canRunAction(action, button) {
     "deleteGroup"
   ]);
   if (workspaceActions.has(action)) return canManageWorkspace();
-  if (action === "openAddDemand" && !canManageWorkspace()) {
-    return !button.dataset.person || button.dataset.person === currentPersonId();
+  if (action === "copyClientPortalLink") return canAccessTrackerView("clients") || canManageWorkspace();
+  if (action === "openAgendaEventDialog" || action === "deleteAgendaEvent") return canEditAgenda();
+  if (action === "openAddDemand") {
+    return canManageDemand(button.dataset.person || currentPersonId());
+  }
+  if (["editDemand", "toggleDemand", "deleteDemand", "toggleTimer", "openTimerEdit", "resetTime", "openDemandNote", "cycleDifficulty"].includes(action)) {
+    const found = findDemand(button.dataset.id);
+    return Boolean(found && canManageDemand(found.personId));
   }
   return true;
 }
@@ -923,6 +1206,14 @@ function handleSubmit(event) {
   if (form.id === "clientRejectionForm") {
     event.preventDefault();
     saveClientRejectionForm(form);
+  }
+  if (form.id === "internalRejectionForm") {
+    event.preventDefault();
+    saveInternalRejectionForm(form);
+  }
+  if (form.id === "briefingForm") {
+    event.preventDefault();
+    saveBriefingForm(form);
   }
 }
 
@@ -1316,12 +1607,21 @@ function switchModule(view) {
 }
 
 function render() {
-  if (!canAccessModule(state.activeView)) state.activeView = "tracker";
-  if (!canAccessTrackerView(state.trackerView)) state.trackerView = "week";
+  if (isClientExperience()) {
+    state.activeView = "approval";
+    state.approvalStatus = "clientReview";
+    state.approvalClientId = resolveClientApprovalId();
+    renderClientPortal();
+    applyRoleVisibility();
+    return;
+  }
+  if (!canAccessModule(state.activeView)) state.activeView = defaultModuleForRole();
+  if (!canAccessTrackerView(state.trackerView)) state.trackerView = defaultTrackerView();
   renderUser();
   renderShellState();
   renderModuleActions();
   renderTopbarActions();
+  renderDashboard();
   renderTracker();
   renderOperations();
   renderApproval();
@@ -1329,7 +1629,15 @@ function render() {
 }
 
 function applyRoleVisibility() {
-  $("#appShell")?.setAttribute("data-access-role", currentAccessRole());
+  const role = currentAccessRole();
+  const shell = $("#appShell");
+  shell?.setAttribute("data-access-role", role);
+  shell?.classList.toggle("client-portal-shell", isClientExperience());
+  document.body.classList.toggle("role-admin", canManageWorkspace() && !isClientExperience());
+  document.body.classList.toggle("role-member", role === "member");
+  document.body.classList.toggle("role-creator", isCreatorAccessRole() && !isClientExperience());
+  document.body.classList.toggle("role-operations", isOperationsAccessRole());
+  document.body.classList.toggle("role-client", isClientExperience());
   document.querySelectorAll("[data-tracker-view]").forEach((button) => {
     button.hidden = !canAccessTrackerView(button.dataset.trackerView);
   });
@@ -1400,24 +1708,49 @@ function renderModuleActions() {
   const mount = $("#moduleActions");
   if (!mount) return;
 
+  if (state.activeView === "dashboard") {
+    const queue = getApprovalQueueStats();
+    mount.innerHTML = `
+      <nav class="side-nav" aria-label="Dashboard">
+        <div class="side-section-title">Gestor</div>
+        <button class="nav-btn active" type="button" data-action="openDashboard">
+          <span class="side-icon">${icons.report}</span><span class="side-label">Visão geral</span>
+        </button>
+        <button class="nav-btn" type="button" data-action="openClientManagement">
+          <span class="side-icon">${icons.team}</span><span class="side-label">Gestão de clientes</span>
+        </button>
+        <button class="nav-btn" type="button" data-action="openBriefingDialog">
+          <span class="side-icon">${icons.plus}</span><span class="side-label">Registrar briefing</span>
+        </button>
+        <div class="side-section-title">Aprovações</div>
+        <button class="nav-btn" type="button" data-action="openClientManagement">
+          <span class="side-icon">${icons.send}</span><span class="side-label">Links de cliente</span>
+          ${queue.clientReview ? `<span class="tracker-head-badge">${queue.clientReview}</span>` : ""}
+        </button>
+      </nav>`;
+    return;
+  }
+
   if (state.activeView === "tracker") {
     const trashCount = visibleTrashItems().length;
-    const managementLinks = canManageWorkspace()
-      ? `
-        ${sideButton("reports", "Relatórios", icons.report, state.trackerView === "reports")}
-        ${sideButton("history", "Histórico", icons.history, state.trackerView === "history")}
-        ${sideButton("team", `Equipe${state.accessRequests.length ? `<span class="tracker-head-badge">${state.accessRequests.length}</span>` : ""}`, icons.team, state.trackerView === "team")}`
-      : "";
+    const refactionCount = getRefactionCreatives().length;
+    const trackerLinks = [
+      canAccessTrackerView("week") ? sideButton("week", "Semana", icons.week, state.trackerView === "week") : "",
+      canAccessTrackerView("refaction") ? sideButton("refaction", `Inbox de refação${refactionCount ? `<span class="tracker-head-badge">${refactionCount}</span>` : ""}`, icons.comment, state.trackerView === "refaction") : "",
+      canAccessTrackerView("agenda") ? sideButton("agenda", "Agenda", icons.agenda, state.trackerView === "agenda") : "",
+      canAccessTrackerView("clients") ? sideButton("clients", "Clientes", icons.team, state.trackerView === "clients") : "",
+      canAccessTrackerView("reports") ? sideButton("reports", "Relatórios", icons.report, state.trackerView === "reports") : "",
+      canAccessTrackerView("history") ? sideButton("history", "Histórico", icons.history, state.trackerView === "history") : "",
+      canAccessTrackerView("team") ? sideButton("team", `Equipe${state.accessRequests.length ? `<span class="tracker-head-badge">${state.accessRequests.length}</span>` : ""}`, icons.team, state.trackerView === "team") : "",
+      canAccessTrackerView("trash") ? sideButton("trash", `Lixeira${trashCount ? `<span class="tracker-head-badge">${trashCount}</span>` : ""}`, icons.trash, state.trackerView === "trash") : ""
+    ].join("");
     mount.innerHTML = `
       <nav class="side-nav tracker-side-group" aria-label="Tracker">
         <div class="side-section-title">Tracker</div>
-        ${sideButton("week", "Semana", icons.week, state.trackerView === "week")}
-        ${sideButton("agenda", "Agenda", icons.agenda, state.trackerView === "agenda")}
-        ${managementLinks}
-        ${sideButton("trash", `Lixeira${trashCount ? `<span class="tracker-head-badge">${trashCount}</span>` : ""}`, icons.trash, state.trackerView === "trash")}
-        <button class="tracker-head-btn primary" type="button" data-action="openAddDemand">
+        ${trackerLinks}
+        ${isCreatorAccessRole() || canManageWorkspace() ? `<button class="tracker-head-btn primary" type="button" data-action="openAddDemand">
           <span class="side-icon">${icons.plus}</span><span class="side-label">Nova demanda</span>
-        </button>
+        </button>` : ""}
       </nav>`;
     return;
   }
@@ -1544,9 +1877,11 @@ function renderTopbarActions() {
   const mount = $("#topbarActions");
   if (!mount) return;
   const license = currentPlan();
-  const planButton = `<button class="shell-btn" type="button" title="Licença e acesso" data-action="openPlanDialog">${esc(license.name)}</button>`;
+  const planButton = canManageWorkspace()
+    ? `<button class="shell-btn" type="button" title="Licença e acesso" data-action="openPlanDialog">${esc(license.name)}</button>`
+    : "";
 
-  if (state.activeView === "tracker") {
+  if (state.activeView === "tracker" || isOperationsAccessRole()) {
     mount.innerHTML = `${planButton}`;
     return;
   }
@@ -1559,11 +1894,188 @@ function renderTopbarActions() {
   mount.innerHTML = `${planButton}<button class="topbar-action-btn" type="button" title="Sincronizar" aria-label="Sincronizar" data-action="syncNow">${icons.sync}</button>`;
 }
 
+function renderDashboard() {
+  const mount = $("#dashboardModuleMount");
+  if (!mount || !state.data) return;
+  if (!canAccessModule("dashboard")) {
+    mount.innerHTML = "";
+    return;
+  }
+
+  if (isCreatorAccessRole()) {
+    mount.innerHTML = renderCreatorDashboard();
+    return;
+  }
+
+  const week = currentWeek();
+  const creatorWeekRefs = getCreatorWeekDemandRefs(week);
+  const weekStats = getWeekStats(week, creatorWeekRefs);
+  const queue = getApprovalQueueStats();
+  const clients = getClients();
+  const refactions = getRefactionCreatives();
+  const upcoming = creatorWeekRefs
+    .filter(({ demand }) => !demand.done)
+    .sort((a, b) => String(a.demand.dueDate || "9999").localeCompare(String(b.demand.dueDate || "9999")))
+    .slice(0, 5);
+
+  mount.innerHTML = `
+    <section class="krio-dashboard">
+      <header class="dashboard-hero">
+        <div>
+          <div class="dashboard-eyebrow">Dashboard geral</div>
+          <h1>${esc(state.tenantMeta?.name || "Workspace Krio")}</h1>
+          <p>Visão executiva das demandas, aprovações e gargalos ativos.</p>
+        </div>
+        <div class="dashboard-actions">
+          <button class="krio-btn" type="button" data-action="openClientManagement">${icons.team} Gestão de clientes</button>
+          <button class="krio-btn primary" type="button" data-action="openBriefingDialog">${icons.plus} Registrar briefing</button>
+        </div>
+      </header>
+
+      <div class="dashboard-kpis">
+        ${dashboardKpi(weekStats.total, "Demandas na semana", `${weekStats.pending} pendentes`)}
+        ${dashboardKpi(`${weekStats.progress}%`, "Progresso", `${weekStats.done} concluídas`)}
+        ${dashboardKpi(queue.internalApproved, "A enviar ao cliente", "Aprovadas internamente")}
+        ${dashboardKpi(queue.clientReview, "No quadro do cliente", "Aguardando retorno")}
+        ${dashboardKpi(refactions.length, "Refações", "Precisam de ajuste")}
+      </div>
+
+      <div class="dashboard-grid">
+        <section class="dashboard-panel">
+          <div class="dashboard-panel-head">
+            <div><h2>Fila de aprovação</h2><p>Onde cada peça está agora.</p></div>
+            <button class="krio-btn small" type="button" data-action="openApprovalModule">Abrir aprovação</button>
+          </div>
+          <div class="dashboard-status-list">
+            ${approvalStatusTabs.map((tab) => {
+              const value = queue[tab.id] || 0;
+              return `
+                <article class="dashboard-status-row">
+                  <span class="approval-status ${attr(tab.id)}">${value}</span>
+                  <div><strong>${esc(tab.label)}</strong><small>${esc(approvalStatuses[tab.id] || "")}</small></div>
+                </article>`;
+            }).join("")}
+          </div>
+        </section>
+
+        <section class="dashboard-panel">
+          <div class="dashboard-panel-head">
+            <div><h2>Próximas entregas</h2><p>Demandas pendentes ordenadas por prazo.</p></div>
+            <button class="krio-btn small" type="button" data-action="openAddDemand">${icons.plus} Demanda</button>
+          </div>
+          <div class="dashboard-list">
+            ${upcoming.map(({ demand, person }) => `
+              <article class="dashboard-demand-row">
+                <span class="ops-avatar" style="width:32px;height:32px;background:${attr(person.color)}">${initials(person.name)}</span>
+                <div>
+                  <strong>${esc(demand.title)}</strong>
+                  <small>${esc(demand.client || "Sem cliente")} ${demand.dueDate ? `- ${esc(formatDate(demand.dueDate))}` : ""}</small>
+                </div>
+              </article>`).join("") || `<div class="approval-empty">Nenhuma demanda pendente nesta semana.</div>`}
+          </div>
+        </section>
+      </div>
+
+      <section class="dashboard-panel">
+        <div class="dashboard-panel-head">
+          <div><h2>Clientes</h2><p>${clients.length} cliente(s) com portal e peças cadastradas.</p></div>
+          <button class="krio-btn small" type="button" data-action="openClientDialog">${icons.plus} Novo cliente</button>
+        </div>
+        <div class="client-management-grid compact">
+          ${clients.slice(0, 6).map(renderClientManagementCard).join("") || `<div class="approval-empty">Cadastre o primeiro cliente para gerar o portal de aprovação.</div>`}
+        </div>
+      </section>
+    </section>`;
+}
+
+function renderCreatorDashboard() {
+  const person = getProfile(currentPersonId()) || { name: state.user?.displayName || "Criador", color: "#3B82F6" };
+  const week = currentWeek();
+  const refs = getAllDemandRefs().filter(({ personId }) => personId === person.id);
+  const weekRefs = getWeekDemandRefs(week).filter(({ personId }) => personId === person.id);
+  const stats = getWeekStats(week, weekRefs);
+  const upcoming = weekRefs
+    .filter(({ demand }) => !demand.done)
+    .sort((a, b) => String(a.demand.dueDate || "9999").localeCompare(String(b.demand.dueDate || "9999")))
+    .slice(0, 5);
+  const demandMix = demandTypes.map((type) => ({
+    ...type,
+    total: weekRefs.filter(({ demand }) => demand.type === type.id).length
+  })).filter((type) => type.total > 0);
+
+  return `
+    <section class="krio-dashboard creator-dashboard">
+      <header class="dashboard-hero">
+        <div>
+          <div class="dashboard-eyebrow">Meu dashboard</div>
+          <h1>${esc(person.name)}</h1>
+          <p>Prioridades, entregas e tempo registrado no seu fluxo de produção.</p>
+        </div>
+        <div class="dashboard-actions">
+          <button class="krio-btn" type="button" data-action="openTracker">Abrir meu Tracker</button>
+          <button class="krio-btn primary" type="button" data-action="openAddDemand">${icons.plus} Nova demanda</button>
+        </div>
+      </header>
+
+      <div class="dashboard-kpis">
+        ${dashboardKpi(stats.total, "Demandas na semana", `${stats.pending} pendentes`) }
+        ${dashboardKpi(`${stats.progress}%`, "Progresso", `${stats.done} concluídas`) }
+        ${dashboardKpi(formatDuration(stats.minutes), "Tempo registrado", "Nesta semana") }
+        ${dashboardKpi(weekRefs.filter(({ demand }) => isOverdue(demand)).length, "Em atraso", "Precisam de atenção") }
+        ${dashboardKpi(refs.filter(({ demand }) => !demand.done).length, "Backlog pessoal", "Demandas abertas") }
+      </div>
+
+      <div class="dashboard-grid">
+        <section class="dashboard-panel">
+          <div class="dashboard-panel-head">
+            <div><h2>Próximas entregas</h2><p>Demandas abertas ordenadas por prazo.</p></div>
+            <button class="krio-btn small" type="button" data-action="openTracker">Ver Tracker</button>
+          </div>
+          <div class="dashboard-list">
+            ${upcoming.map(({ demand }) => `
+              <article class="dashboard-demand-row">
+                <span class="ops-avatar" style="width:32px;height:32px;background:${attr(person.color)}">${initials(person.name)}</span>
+                <div>
+                  <strong>${esc(demand.title)}</strong>
+                  <small>${esc(demand.client || "Sem cliente")} ${demand.dueDate ? `- ${esc(formatDate(demand.dueDate))}` : ""}</small>
+                </div>
+              </article>`).join("") || `<div class="approval-empty">Nenhuma demanda pendente nesta semana.</div>`}
+          </div>
+        </section>
+
+        <section class="dashboard-panel">
+          <div class="dashboard-panel-head">
+            <div><h2>Distribuição da semana</h2><p>Volume por tipo de demanda.</p></div>
+          </div>
+          <div class="dashboard-status-list">
+            ${demandMix.map((type) => `
+              <article class="dashboard-status-row">
+                <span class="tracker-type-badge ${attr(type.id)}">${type.total}</span>
+                <div><strong>${esc(type.label)}</strong><small>${percent(type.total, weekRefs.length)}% da sua semana</small></div>
+              </article>`).join("") || `<div class="approval-empty">Sua semana ainda não tem demandas.</div>`}
+          </div>
+        </section>
+      </div>
+    </section>`;
+}
+
+function dashboardKpi(value, label, detail) {
+  return `<article class="dashboard-kpi"><span>${esc(label)}</span><strong>${esc(value)}</strong><small>${esc(detail)}</small></article>`;
+}
+
 function renderTracker() {
   const mount = $("#trackerModuleMount");
   if (!mount || !state.data) return;
-  if (!canAccessTrackerView(state.trackerView)) state.trackerView = "week";
+  if (!canAccessTrackerView(state.trackerView)) state.trackerView = defaultTrackerView();
 
+  if (state.trackerView === "clients") {
+    mount.innerHTML = renderClientManagement();
+    return;
+  }
+  if (state.trackerView === "refaction") {
+    mount.innerHTML = renderRefactionInbox();
+    return;
+  }
   if (state.trackerView === "agenda") {
     mount.innerHTML = renderAgenda();
     return;
@@ -1586,7 +2098,7 @@ function renderTracker() {
   }
 
   const week = currentWeek();
-  const stats = getWeekStats(week, getVisibleWeekDemandRefs(week));
+  const stats = getWeekStats(week, getCreatorWeekDemandRefs(week).filter(({ personId }) => canViewPerson(personId)));
   const filteredTypes = state.trackerFilter === "all"
     ? demandTypes
     : demandTypes.filter((type) => type.id === state.trackerFilter);
@@ -1698,17 +2210,118 @@ function renderDemandItem(demand, personId, typeId) {
         </div>
         <div class="tracker-demand-meta">
           ${!demand.done ? `<button class="tracker-timer-btn ${running ? "running" : ""}" type="button" data-action="toggleTimer" data-id="${attr(demand.id)}">${running ? "Pausar" : "Iniciar"}${hasTime ? ` <span class="tracker-timer-separator">·</span><span class="tracker-timer-live" data-live-timer data-id="${attr(demand.id)}" data-format="clock">${esc(timerText)}</span>` : ""}</button>` : ""}
-          ${!demand.done && hasTime ? `<button class="tracker-timer-btn timer-edit" type="button" title="Editar tempo acumulado" aria-label="Editar tempo acumulado" data-action="openTimerEdit" data-id="${attr(demand.id)}">${icons.edit}</button>` : ""}
-          ${!demand.done && hasTime ? `<button class="tracker-timer-btn timer-reset" type="button" title="Zerar timer" aria-label="Zerar timer" data-action="resetTime" data-id="${attr(demand.id)}">${icons.close}</button>` : ""}
           ${demand.done && time ? `<button class="tracker-demand-time" type="button" title="Editar tempo" data-action="openTimerEdit" data-id="${attr(demand.id)}">${formatDuration(time)}</button>` : ""}
           ${demand.dueDate ? `<span class="tracker-demand-chip ${isOverdue(demand) ? "warn" : ""}">${esc(formatDate(demand.dueDate))}</span>` : ""}
-          ${demand.done ? `<button class="diff-badge diff-${attr(demand.difficulty || "none")}" type="button" title="Alterar dificuldade" data-action="cycleDifficulty" data-id="${attr(demand.id)}">${difficultyLabel(demand.difficulty || "none")}</button>` : ""}
           <button class="tracker-demand-obs ${demand.notes ? "" : "empty"}" type="button" title="${attr(noteLabel)}" data-action="openDemandNote" data-id="${attr(demand.id)}">${icons.comment}${demand.notes ? `<span>${esc(demand.notes)}</span>` : ""}</button>
+        </div>
+        <div class="tracker-demand-secondary">
+          ${!demand.done && hasTime ? `<button class="tracker-timer-btn timer-edit" type="button" title="Editar tempo acumulado" aria-label="Editar tempo acumulado" data-action="openTimerEdit" data-id="${attr(demand.id)}">${icons.edit} Editar tempo</button>` : ""}
+          ${!demand.done && hasTime ? `<button class="tracker-timer-btn timer-reset" type="button" title="Zerar timer" aria-label="Zerar timer" data-action="resetTime" data-id="${attr(demand.id)}">${icons.close} Zerar timer</button>` : ""}
+          ${demand.done ? `<button class="diff-badge diff-${attr(demand.difficulty || "none")}" type="button" title="Alterar dificuldade" data-action="cycleDifficulty" data-id="${attr(demand.id)}">${difficultyLabel(demand.difficulty || "none")}</button>` : ""}
         </div>
       </div>
       <div class="tracker-demand-actions">
+        ${(!demand.done && hasTime) || demand.done ? `<button class="tracker-demand-action-btn" type="button" title="Mais opções" aria-label="Mais opções" data-action="toggleDemandMenu" data-id="${attr(demand.id)}">···</button>` : ""}
         <button class="tracker-demand-action-btn" type="button" title="Editar" data-action="editDemand" data-id="${attr(demand.id)}">${icons.edit}</button>
         <button class="tracker-demand-action-btn danger" type="button" title="Excluir" data-action="deleteDemand" data-id="${attr(demand.id)}">${icons.trash}</button>
+      </div>
+    </article>`;
+}
+
+function renderClientManagement() {
+  const clients = getClients();
+  const canManageClients = canManageWorkspace();
+  return `
+    <section class="client-management">
+      <header class="tracker-page-header client-management-head">
+        <div class="tracker-page-header-left">
+          <div class="tracker-week-label">Gestão de clientes</div>
+          <h1 class="tracker-page-heading">Portais, briefings e demandas</h1>
+          <p>Cadastre clientes, gere links de aprovação e transforme briefing em tarefa para produção.</p>
+        </div>
+        ${canManageClients ? `<div class="tracker-week-actions">
+          <button class="tracker-week-action" type="button" data-action="openBriefingDialog">${icons.plus} Registrar briefing</button>
+          <button class="tracker-week-action" type="button" data-action="openClientDialog">${icons.plus} Novo cliente</button>
+        </div>` : ""}
+      </header>
+      <div class="client-management-grid">
+        ${clients.map(renderClientManagementCard).join("") || `<div class="approval-empty">Cadastre o primeiro cliente para gerar o portal de aprovação.</div>`}
+      </div>
+    </section>`;
+}
+
+function renderClientManagementCard(client) {
+  const creatives = getCreatives(client);
+  const counts = countCreativesByStatus(creatives);
+  const portalUrl = clientPortalUrl(client);
+  const briefings = asArray(client.briefings).slice(-3).reverse();
+  return `
+    <article class="client-management-card">
+      <header>
+        ${clientAvatar(client)}
+        <div>
+          <strong>${esc(client.name)}</strong>
+          <span>${esc(client.email || "Sem email de acesso")}</span>
+        </div>
+      </header>
+      <div class="client-management-status">
+        <span><b>${counts.clientReview || 0}</b> no cliente</span>
+        <span><b>${counts.internalApproved || 0}</b> a enviar</span>
+        <span><b>${counts.internalRejected || 0}</b> refação</span>
+      </div>
+      <label class="approval-field client-management-link">Link do portal
+        <input class="krio-input" readonly value="${attr(portalUrl)}" aria-label="Link do portal de ${attr(client.name)}">
+      </label>
+      <div class="client-management-actions">
+        <button class="krio-btn small" type="button" data-action="copyClientPortalLink" data-client="${attr(client.id)}">${icons.send} Copiar link</button>
+        ${canManageWorkspace() ? `
+          <button class="krio-btn small" type="button" data-action="openBriefingDialog" data-client="${attr(client.id)}">${icons.plus} Briefing</button>
+          <button class="krio-icon-btn" type="button" title="Editar cliente" aria-label="Editar cliente" data-action="openClientDialog" data-id="${attr(client.id)}">${icons.edit}</button>` : ""}
+      </div>
+      <div class="client-briefing-list">
+        ${briefings.length ? briefings.map((briefing) => `
+          <article>
+            <strong>${esc(briefing.title || "Briefing")}</strong>
+            <span>${esc(formatDateTime(briefing.createdAt || Date.now()))}</span>
+          </article>`).join("") : `<span class="client-briefing-empty">Sem briefings registrados.</span>`}
+      </div>
+    </article>`;
+}
+
+function renderRefactionInbox() {
+  const items = getRefactionCreatives();
+  return `
+    <section class="refaction-inbox">
+      <header class="tracker-page-header">
+        <div class="tracker-page-header-left">
+          <div class="tracker-week-label">Inbox de refação</div>
+          <h1 class="tracker-page-heading">Ajustes pendentes</h1>
+          <p>Peças reprovadas interna ou externamente, com o último feedback em destaque.</p>
+        </div>
+      </header>
+      <div class="refaction-grid">
+        ${items.map(renderRefactionCard).join("") || `<div class="approval-empty">Nenhuma peça em refação agora.</div>`}
+      </div>
+    </section>`;
+}
+
+function renderRefactionCard(item) {
+  const creative = item.creative;
+  const source = creative.clientRejectedAt ? "Cliente" : "Interno";
+  return `
+    <article class="refaction-card">
+      ${renderCreativeCover(creative)}
+      <div class="refaction-card-body">
+        <div>
+          <span class="approval-status internalRejected">${esc(source)}</span>
+          <h3>${esc(creative.title)}</h3>
+          <p>${esc(item.client?.name || "Cliente")}</p>
+        </div>
+        ${creative.revisionAlert ? `<blockquote>${esc(creative.revisionAlert)}</blockquote>` : `<blockquote>Sem comentario registrado.</blockquote>`}
+        <div class="refaction-card-actions">
+          <button class="krio-btn small" type="button" data-action="openCreativeDetail" data-id="${attr(creative.id)}">Ver detalhe</button>
+          <button class="krio-btn small primary" type="button" data-action="markCreativeCorrected" data-id="${attr(creative.id)}">${icons.check} Corrigido</button>
+        </div>
       </div>
     </article>`;
 }
@@ -1722,7 +2335,7 @@ function renderAgenda() {
       : weekRangeLabel(startOfWeek(cursor));
   return `
     <section class="krio-tracker">
-      ${trackerSectionHead("Agenda", "Compromissos, prazos e entregas planejados.", `<button class="krio-btn primary" type="button" data-action="openAgendaEventDialog">${icons.plus} Compromisso</button>`)}
+      ${trackerSectionHead("Agenda", "Compromissos, prazos e entregas planejados.", canEditAgenda() ? `<button class="krio-btn primary" type="button" data-action="openAgendaEventDialog">${icons.plus} Compromisso</button>` : "")}
       <div class="agenda-controls">
         <div class="agenda-view-toggle">
           <button class="agenda-view-btn ${state.agendaView === "month" ? "active" : ""}" type="button" data-action="setAgendaView" data-view="month">Mês</button>
@@ -1753,7 +2366,7 @@ function renderMonthAgenda(cursor) {
     const dayIso = isoDate(day);
     const dayEvents = events.filter((item) => item.date === dayIso);
     cells += `
-      <div class="agenda-month-cell ${dayIso === today ? "today" : ""} ${day.getMonth() !== cursor.getMonth() ? "other-month" : ""}" data-action="openAgendaEventDialog" data-date="${attr(dayIso)}">
+      <div class="agenda-month-cell ${dayIso === today ? "today" : ""} ${day.getMonth() !== cursor.getMonth() ? "other-month" : ""}" ${canEditAgenda() ? `data-action="openAgendaEventDialog" data-date="${attr(dayIso)}"` : ""}>
         <div class="agenda-day-num">${day.getDate()}</div>
         ${dayEvents.slice(0, 3).map(renderAgendaMonthItem).join("")}
         ${dayEvents.length > 3 ? `<div class="agenda-more-pill">+${dayEvents.length - 3}</div>` : ""}
@@ -1780,12 +2393,12 @@ function renderWeekAgenda(cursor) {
         const dayEvents = events.filter((item) => item.date === dayIso);
         return `
           <div class="agenda-week-col ${dayIso === today ? "today-col" : ""}">
-            <div class="agenda-week-col-head" data-action="openAgendaEventDialog" data-date="${attr(dayIso)}">
+            <div class="agenda-week-col-head" ${canEditAgenda() ? `data-action="openAgendaEventDialog" data-date="${attr(dayIso)}"` : ""}>
               <div class="agenda-week-col-day">${formatWeekday(day)}</div>
               <div class="agenda-week-col-num">${day.getDate()}</div>
             </div>
             <div class="agenda-week-col-body">
-              ${dayEvents.length ? dayEvents.map(renderAgendaWeekItem).join("") : `<button class="agenda-week-empty" type="button" data-action="openAgendaEventDialog" data-date="${attr(dayIso)}">Livre</button>`}
+              ${dayEvents.length ? dayEvents.map(renderAgendaWeekItem).join("") : canEditAgenda() ? `<button class="agenda-week-empty" type="button" data-action="openAgendaEventDialog" data-date="${attr(dayIso)}">Livre</button>` : `<div class="agenda-week-empty">Livre</div>`}
             </div>
           </div>`;
       }).join("")}
@@ -1814,7 +2427,12 @@ function renderYearAgenda(cursor) {
 }
 
 function renderAgendaMonthItem(item) {
-  const action = item.kind === "demand" ? "editDemand" : "openAgendaEventDialog";
+  const action = item.kind === "demand"
+    ? (canManageDemand(item.personId) ? "editDemand" : "")
+    : (canEditAgenda() ? "openAgendaEventDialog" : "");
+  if (!action) {
+    return `<div class="agenda-month-event-pill ${attr(item.type || "meeting")}" title="${attr(item.title)}">${item.time ? `${esc(item.time)} ` : ""}${esc(item.title)}</div>`;
+  }
   return `
     <button class="agenda-month-event-pill ${attr(item.type || "meeting")}" type="button" data-action="${action}" data-id="${attr(item.id)}" title="${attr(item.title)}">
       ${item.time ? `${esc(item.time)} ` : ""}${esc(item.title)}
@@ -1822,7 +2440,15 @@ function renderAgendaMonthItem(item) {
 }
 
 function renderAgendaWeekItem(item) {
-  const action = item.kind === "demand" ? "editDemand" : "openAgendaEventDialog";
+  const action = item.kind === "demand"
+    ? (canManageDemand(item.personId) ? "editDemand" : "")
+    : (canEditAgenda() ? "openAgendaEventDialog" : "");
+  if (!action) {
+    return `<div class="agenda-week-event ${attr(item.type || "meeting")}">
+      <div class="agenda-week-event-time">${esc(item.time || item.client || item.label || "Compromisso")}</div>
+      <div class="agenda-week-event-title">${esc(item.title)}</div>
+    </div>`;
+  }
   return `
     <button class="agenda-week-event ${attr(item.type || "meeting")}" type="button" data-action="${action}" data-id="${attr(item.id)}">
       <div class="agenda-week-event-time">${esc(item.time || item.client || item.label || "Compromisso")}</div>
@@ -1841,7 +2467,8 @@ function getAgendaItems() {
       time: "",
       type: demand.type || "mensal",
       client: demand.client || "",
-      label: person.name
+      label: person.name,
+      personId: person.id
     }));
   const eventItems = normalizeAgendaEvents(state.data?.tracker?.events || []).map((event) => ({
     ...event,
@@ -1851,9 +2478,9 @@ function getAgendaItems() {
 }
 
 function renderReports() {
-  const all = getAllDemandRefs();
+  const all = getCreatorDemandRefs();
   const week = currentWeek();
-  const weekRefs = getWeekDemandRefs(week);
+  const weekRefs = getCreatorWeekDemandRefs(week);
   const done = all.filter(({ demand }) => demand.done).length;
   const minutes = all.reduce((sum, { demand }) => sum + effectiveMinutes(demand), 0);
   const byType = demandTypes.map((type) => ({
@@ -1873,7 +2500,7 @@ function renderReports() {
         <div>
           <span>Relatório da semana</span>
           <strong>${esc(week.title)}</strong>
-          <p>${weekRefs.length} demanda(s), ${getProfiles().length} pessoa(s), ${formatDuration(weekRefs.reduce((sum, { demand }) => sum + effectiveMinutes(demand), 0))} registrados.</p>
+          <p>${weekRefs.length} demanda(s), ${getCreatorProfiles().length} pessoa(s), ${formatDuration(weekRefs.reduce((sum, { demand }) => sum + effectiveMinutes(demand), 0))} registrados.</p>
         </div>
         <button class="krio-btn primary" type="button" data-action="openReportPreview">Abrir prévia</button>
       </div>
@@ -1907,7 +2534,7 @@ function renderHistory() {
       ${trackerSectionHead("Histórico", "Semanas registradas e entregas finalizadas.")}
       <div>
         ${weeks.map((week, index) => {
-          const stats = getWeekStats(week);
+          const stats = getWeekStats(week, getCreatorWeekDemandRefs(week));
           return `
             <article class="history-week">
               <button class="history-week-header" type="button" data-action="noop">
@@ -1919,7 +2546,7 @@ function renderHistory() {
                 </span>
               </button>
               <div class="history-week-body open">
-                ${getWeekDemandRefs(week).length ? getWeekDemandRefs(week).map(({ demand, person }) => `
+                ${getCreatorWeekDemandRefs(week).length ? getCreatorWeekDemandRefs(week).map(({ demand, person }) => `
                   <div class="history-item">
                     <span class="history-done-dot" style="background:${demand.done ? "var(--green)" : "var(--muted-2)"}"></span>
                     <span class="history-person-tag">${esc(person.name)}</span>
@@ -2067,10 +2694,10 @@ function renderOperations() {
   }
 
   const week = currentWeek();
-  const stats = getWeekStats(week);
-  const all = getWeekDemandRefs(week);
+  const all = getCreatorWeekDemandRefs(week);
+  const stats = getWeekStats(week, all);
   const live = all.filter(({ demand }) => demand.runningStartedAt);
-  const people = getProfiles().map((person) => {
+  const people = getCreatorProfiles().map((person) => {
     const personDemands = all.filter((ref) => ref.person.id === person.id);
     const done = personDemands.filter((ref) => ref.demand.done).length;
     return {
@@ -2271,6 +2898,78 @@ function renderApproval() {
     </section>`;
 }
 
+function renderClientPortal() {
+  const mount = $("#approvalModuleMount");
+  if (!mount || !state.data) return;
+  document.querySelectorAll("[data-module-view]").forEach((viewNode) => {
+    viewNode.classList.toggle("active", viewNode.dataset.moduleView === "approval");
+  });
+  const title = $("#pageTitle");
+  const subtitle = $("#pageSubtitle");
+  if (title) title.textContent = "Portal do cliente";
+  if (subtitle) subtitle.textContent = "";
+
+  const client = getClient(state.approvalClientId) || getClients()[0];
+  if (!client) {
+    mount.innerHTML = `<section class="client-portal"><div class="approval-empty">Link de aprovação sem peças disponíveis.</div></section>`;
+    return;
+  }
+  state.approvalClientId = client.id;
+  syncPostedCreatives();
+  const creatives = getCreatives(client);
+  const pending = creatives.filter((creative) => normalizeApprovalStatus(creative.status) === "clientReview");
+  const history = creatives.filter((creative) => ["scheduled", "posted", "internalRejected"].includes(normalizeApprovalStatus(creative.status)) && (creative.clientApprovedAt || creative.clientRejectedAt || creative.postedAt));
+
+  mount.innerHTML = `
+    <section class="client-portal">
+      <header class="client-portal-hero">
+        <div>
+          <span>${esc(state.portalIndex?.workspaceName || state.tenantMeta?.name || "Krio")}</span>
+          <h1>${esc(client.name)}</h1>
+          <p>${pending.length ? `${pending.length} peça(s) aguardando revisão.` : "Nenhuma peça aguardando revisão."}</p>
+        </div>
+        ${clientAvatar(client, "client-portal-logo")}
+      </header>
+
+      <section class="client-portal-section">
+        <div class="approval-section-head">
+          <div>
+            <h3>Pendentes de revisão</h3>
+            <p>Aprove ou solicite ajuste com comentário obrigatório.</p>
+          </div>
+        </div>
+        ${renderClientApprovalBoard(pending, client)}
+      </section>
+
+      <section class="client-portal-section">
+        <div class="approval-section-head">
+          <div>
+            <h3>Histórico</h3>
+            <p>Peças aprovadas, ajustadas ou publicadas.</p>
+          </div>
+        </div>
+        ${renderClientPortalHistory(history, client)}
+      </section>
+    </section>`;
+}
+
+function renderClientPortalHistory(creatives, client) {
+  return renderGroupedCreativeBoard(
+    creatives,
+    client,
+    (creative) => renderCreativeCard(creative, creative.groupId, true, `<span class="approval-status ${attr(normalizeApprovalStatus(creative.status))}">${esc(clientPortalHistoryLabel(creative))}</span>`),
+    `<div class="approval-empty">Nenhum historico ainda.</div>`,
+    "client-board"
+  );
+}
+
+function clientPortalHistoryLabel(creative) {
+  if (creative.clientRejectedAt) return "Ajuste solicitado";
+  if (creative.postedAt || normalizeApprovalStatus(creative.status) === "posted") return "Publicado";
+  if (creative.clientApprovedAt || normalizeApprovalStatus(creative.status) === "scheduled") return "Aprovado";
+  return approvalStatuses[normalizeApprovalStatus(creative.status)] || "Histórico";
+}
+
 function renderClientCard(client) {
   const creatives = getCreatives(client);
   const counts = countCreativesByStatus(creatives);
@@ -2392,7 +3091,7 @@ function renderClientApprovalBoard(creatives, client) {
     client,
     (creative) => renderCreativeCard(creative, creative.groupId, true, `
         <button class="krio-btn primary" type="button" data-action="clientApproveCreative" data-id="${attr(creative.id)}">${icons.check} Aprovar</button>
-        <button class="krio-btn danger" type="button" data-action="openClientRejectionDialog" data-id="${attr(creative.id)}">Reprovar</button>
+        <button class="krio-btn danger" type="button" data-action="openClientRejectionDialog" data-id="${attr(creative.id)}">Solicitar ajuste</button>
       `),
     `<div class="approval-empty">Nenhuma peça enviada para ${esc(client.name)} ainda.</div>`,
     "client-board"
@@ -2479,7 +3178,7 @@ function renderCreativeCard(creative, groupId = creative.groupId || "", flat = f
   const status = normalizeApprovalStatus(creative.status);
   const canDrag = status === "prov" && !flat;
   return `
-    <article class="approval-creative ${flat ? "flat" : ""} ${attr(status)}" role="button" tabindex="0" draggable="${canDrag ? "true" : "false"}" data-action="openCreativeDetail" data-id="${attr(creative.id)}" data-group="${attr(groupId)}">
+    <article class="approval-creative ${flat ? "flat" : ""} ${attr(status)}${creative.revisionAlert ? " has-revision" : ""}" role="button" tabindex="0" draggable="${canDrag ? "true" : "false"}" data-action="openCreativeDetail" data-id="${attr(creative.id)}" data-group="${attr(groupId)}">
       ${renderCreativeCover(creative)}
       <div class="approval-creative-body">
         <input class="approval-card-title-input" data-approval-inline="creativeTitle" data-id="${attr(creative.id)}" data-original-value="${attr(creative.title || "Sem título")}" value="${attr(creative.title || "Sem título")}" aria-label="Título da peça">
@@ -2495,11 +3194,11 @@ function renderCreativeCard(creative, groupId = creative.groupId || "", flat = f
 function openDemandDialog(id = "", defaults = {}) {
   const existing = id ? findDemand(id)?.demand : null;
   const existingRef = id ? findDemand(id) : null;
-  if (existingRef && !canViewPerson(existingRef.personId)) return;
+  if (existingRef && !canManageDemand(existingRef.personId)) return;
   const week = currentWeek();
   const firstPerson = getVisibleProfiles()[0]?.id || currentPersonId() || getProfiles()[0]?.id || "";
   const selectedPerson = canManageWorkspace()
-    ? (existingRef?.personId || defaults.personId || firstPerson)
+    ? (existingRef?.personId || (getVisibleProfiles().some((person) => person.id === defaults.personId) ? defaults.personId : firstPerson))
     : currentPersonId();
   const selectedPersonProfile = getProfile(selectedPerson) || getProfiles()[0] || {};
   const availableDemandTypes = getPersonDemandTypes(selectedPersonProfile);
@@ -2539,7 +3238,7 @@ function openDemandDialog(id = "", defaults = {}) {
           </label>
           <div class="form-row">
             <label class="tracker-field">Responsável
-              <select class="krio-input" name="personId">${(canManageWorkspace() ? getProfiles() : getVisibleProfiles()).map((person) => `<option value="${attr(person.id)}" ${person.id === selectedPerson ? "selected" : ""}>${esc(person.name)}</option>`).join("")}</select>
+              <select class="krio-input" name="personId">${getVisibleProfiles().map((person) => `<option value="${attr(person.id)}" ${person.id === selectedPerson ? "selected" : ""}>${esc(person.name)}</option>`).join("")}</select>
             </label>
             <label class="tracker-field">Tipo
               <select class="krio-input" name="type">${availableDemandTypes.map((type) => `<option value="${type.id}" ${type.id === selectedType ? "selected" : ""}>${type.label}</option>`).join("")}</select>
@@ -2588,6 +3287,7 @@ function saveDemandForm(form) {
   }
   const requestedPersonId = String(formData.get("personId") || "");
   const personId = canManageWorkspace() ? requestedPersonId : currentPersonId();
+  if (!personId || !isCreatorProfile(getProfile(personId)) || !canManageDemand(personId)) return;
   const requestedType = String(formData.get("type") || "mensal");
   const allowedTypes = getPersonDemandTypes(getProfile(personId) || {});
   if (!allowedTypes.length && !id) return;
@@ -2614,6 +3314,7 @@ function saveDemandForm(form) {
 
   const existing = id ? findDemand(id) : null;
   if (existing) {
+    if (!canManageDemand(existing.personId)) return;
     Object.assign(payload, {
       done: existing.demand.done,
       timeMinutes: Number(formData.get("timeMinutes") || existing.demand.timeMinutes || 0),
@@ -2631,6 +3332,115 @@ function saveDemandForm(form) {
   saveAndRender();
 }
 
+function openBriefingDialog(clientId = "") {
+  const clients = getClients();
+  if (!clients.length) {
+    openClientDialog();
+    return;
+  }
+  const selectedClientId = clientId || state.approvalClientId || clients[0]?.id || "";
+  const selectedPerson = getVisibleProfiles()[0]?.id || "";
+  const selectedProfile = getProfile(selectedPerson) || {};
+  const availableTypes = getPersonDemandTypes(selectedProfile);
+  $("#trackerDialogHost").innerHTML = `
+    <div class="tracker-dialog-backdrop" data-dialog-backdrop>
+      <div class="tracker-dialog" role="dialog" aria-modal="true" aria-labelledby="briefingDialogTitle">
+        <div class="tracker-dialog-head">
+          <strong id="briefingDialogTitle">Registrar briefing</strong>
+          <button class="krio-icon-btn" type="button" data-action="closeDialog" aria-label="Fechar">${icons.close}</button>
+        </div>
+        <form id="briefingForm" class="tracker-form">
+          <div class="form-row">
+            <label class="tracker-field">Cliente
+              <select class="krio-input" name="clientId">
+                ${clients.map((client) => `<option value="${attr(client.id)}" ${client.id === selectedClientId ? "selected" : ""}>${esc(client.name)}</option>`).join("")}
+              </select>
+            </label>
+            <label class="tracker-field">Responsável
+              <select class="krio-input" name="personId">
+                ${getVisibleProfiles().map((person) => `<option value="${attr(person.id)}" ${person.id === selectedPerson ? "selected" : ""}>${esc(person.name)}</option>`).join("")}
+              </select>
+            </label>
+          </div>
+          <label class="tracker-field">Título da demanda
+            <input class="krio-input" name="title" required placeholder="Ex: Campanha de lançamento - posts da semana">
+          </label>
+          <div class="form-row">
+            <label class="tracker-field">Tipo
+              <select class="krio-input" name="type">
+                ${(availableTypes.length ? availableTypes : demandTypes).map((type) => `<option value="${attr(type.id)}">${esc(type.label)}</option>`).join("")}
+              </select>
+            </label>
+            <label class="tracker-field">Prazo
+              <input class="krio-input" name="dueDate" type="date">
+            </label>
+          </div>
+          <label class="tracker-field">Briefing
+            <textarea class="tracker-textarea" name="briefing" required placeholder="Objetivo, referências, formatos, canais, restrições e observações do cliente"></textarea>
+          </label>
+          <div class="tracker-dialog-actions">
+            <button class="krio-btn" type="button" data-action="closeDialog">Cancelar</button>
+            <button class="krio-btn primary" type="submit">Criar demanda</button>
+          </div>
+        </form>
+      </div>
+    </div>`;
+}
+
+function saveBriefingForm(form) {
+  const formData = new FormData(form);
+  const clientId = String(formData.get("clientId") || "");
+  const client = getClient(clientId);
+  if (!client) return;
+  const personId = String(formData.get("personId") || getVisibleProfiles()[0]?.id || "");
+  const profile = getProfile(personId) || {};
+  if (!personId || !isCreatorProfile(profile) || !canManageWorkspace()) return;
+  const allowedTypes = getPersonDemandTypes(profile);
+  const requestedType = String(formData.get("type") || "avulso");
+  const type = allowedTypes.some((candidate) => candidate.id === requestedType)
+    ? requestedType
+    : allowedTypes[0]?.id || "avulso";
+  const title = String(formData.get("title") || "").trim();
+  const briefing = String(formData.get("briefing") || "").trim();
+  if (!title || !briefing) return;
+
+  const briefingRecord = {
+    id: newId("briefing"),
+    title,
+    text: briefing,
+    personId,
+    type,
+    dueDate: String(formData.get("dueDate") || ""),
+    createdBy: state.user?.uid || "",
+    createdAt: Date.now()
+  };
+  client.briefings = asArray(client.briefings);
+  client.briefings.push(briefingRecord);
+
+  const week = currentWeek();
+  ensureWeekPerson(week, personId);
+  week.people[personId][type].push({
+    id: newId("dem"),
+    title,
+    client: client.name,
+    clientId: client.id,
+    briefingId: briefingRecord.id,
+    type,
+    dueDate: briefingRecord.dueDate,
+    estimateMinutes: 0,
+    difficulty: "none",
+    notes: briefing,
+    done: false,
+    timeMinutes: 0,
+    createdAt: Date.now()
+  });
+
+  closeDialogs();
+  state.activeView = "tracker";
+  state.trackerView = "week";
+  saveAndRender();
+}
+
 function openPersonDialog(id = "") {
   const person = id ? getProfile(id) : null;
   $("#trackerDialogHost").innerHTML = `
@@ -2644,8 +3454,8 @@ function openPersonDialog(id = "") {
           <label class="tracker-field">Nome
             <input class="krio-input" name="name" required value="${attr(person?.name || "")}" placeholder="Nome da pessoa">
           </label>
-          <label class="tracker-field">Função
-            <input class="krio-input" name="role" value="${attr(person?.role || "")}" placeholder="Designer, Social media...">
+          <label class="tracker-field">Função de trabalho
+            <input class="krio-input" name="role" value="${attr(person?.role || "")}" placeholder="Designer, Editor ou Planejamento">
           </label>
           ${colorPickerField("Cor", "color", person?.color || "#3B82F6", "tracker-field")}
           <div class="tracker-field">Tarefas atribuídas
@@ -2663,9 +3473,10 @@ function openPersonDialog(id = "") {
             </label>
             <label class="tracker-field">Papel no sistema
               <select class="krio-input" name="accessRole">
-                ${["member", "admin"].map((role) => `<option value="${role}" ${role === (person?.accessRole || "member") ? "selected" : ""}>${accessRoleLabel(role)}</option>`).join("")}
+                ${workspaceAccessRoles.map(({ id: role, label }) => `<option value="${role}" ${role === normalizeAssignableAccessRole(person?.accessRole) ? "selected" : ""}>${esc(label)}</option>`).join("")}
               </select>
             </label>` : ""}
+          ${canManageWorkspace() ? `<p class="tracker-dialog-copy">O papel define os módulos visíveis. A função de trabalho identifica quem aparece no Tracker como criador.</p>` : ""}
           <div class="tracker-dialog-actions">
             <button class="krio-btn" type="button" data-action="closeDialog">Cancelar</button>
             <button class="krio-btn primary" type="submit">Salvar</button>
@@ -2694,7 +3505,7 @@ function savePersonForm(form) {
     role: String(formData.get("role") || "Equipe").trim(),
     color: String(formData.get("color") || "#3B82F6"),
     accessUid,
-    accessRole: String(formData.get("accessRole") || "member"),
+    accessRole: normalizeAssignableAccessRole(String(formData.get("accessRole") || "creator")),
     assignedTypes
   };
   state.data.tracker.weeks.forEach((week) => ensureWeekPerson(week, id));
@@ -2829,7 +3640,9 @@ async function saveClientForm(form) {
   if (!name) return;
   const existing = state.data.approval.clients[id] || { groups: {} };
   const logoFile = formData.get("logoFile");
-  const logoUrl = logoFile?.size ? await fileToDataUrl(logoFile) : existing.logoUrl || "";
+  const logoUrl = logoFile?.size
+    ? (await uploadFileToStorage(logoFile, `tenants/${state.tenantId}/clients/${id}/logo_${Date.now()}`) || await fileToDataUrl(logoFile))
+    : existing.logoUrl || "";
 
   state.data.approval.clients[id] = {
     ...existing,
@@ -2837,7 +3650,10 @@ async function saveClientForm(form) {
     name,
     email: String(formData.get("email") || "").trim().toLowerCase(),
     color: String(formData.get("color") || "#3B82F6"),
-    logoUrl
+    logoUrl,
+    portalEnabled: true,
+    portalCreatedAt: existing.portalCreatedAt || Date.now(),
+    portalUpdatedAt: Date.now()
   };
   state.approvalClientId = id;
   state.approvalStatus = "prov";
@@ -2852,10 +3668,19 @@ function deleteClient(id) {
     if (stored) stored.clientIds = uniqueClientIds(stored.clientIds).filter((clientId) => clientId !== id);
   });
   if (state.approvalClientId === id) state.approvalClientId = null;
+  removeClientPortalIndex(id);
   closeDialogs();
   saveAndRender();
 }
 
+async function removeClientPortalIndex(id) {
+  if (!id || !state.firebase?.db || state.demoMode || state.tenantId === "local") return;
+  try {
+    await state.firebase.set(state.firebase.ref(state.firebase.db, `approvalPortals/${id}`), null);
+  } catch {
+    setSyncState("offline", "Não foi possível remover o link do portal.");
+  }
+}
 function openClientFolderDialog(id = "") {
   const folder = id ? getClientFolder(id) : null;
   const selected = new Set(uniqueClientIds(folder?.clientIds || []));
@@ -3122,13 +3947,12 @@ async function saveCreativeForm(form) {
   }
 
   const imageFiles = formData.getAll("imageFiles").filter((file) => file?.size && file.type?.startsWith("image/"));
-  const uploadedMedia = await Promise.all(imageFiles.map(async (file, index) => ({
-    id: newId("media"),
-    type: "image",
-    url: await fileToDataUrl(file, { outputType: "image/jpeg", quality: 0.78, maxSide: 1440, background: "#ffffff" }),
-    label: file.name || `Imagem ${index + 1}`,
-    createdAt: Date.now()
-  })));
+  const uploadedMedia = await Promise.all(imageFiles.map(async (file, index) => {
+    const storagePath = `tenants/${state.tenantId}/creatives/${id}/media_${Date.now()}_${index}`;
+    const storageUrl = await uploadFileToStorage(file, storagePath);
+    const url = storageUrl || await fileToDataUrl(file, { outputType: "image/jpeg", quality: 0.78, maxSide: 1440, background: "#ffffff" });
+    return { id: newId("media"), type: "image", url, label: file.name || `Imagem ${index + 1}`, createdAt: Date.now() };
+  }));
   const driveUrl = String(formData.get("driveUrl") || "").trim();
   const existingMedia = existing?.creative ? getCreativeMedia(existing.creative) : [];
   const existingLink = existingMedia.find((item) => item.type === "link");
@@ -3170,6 +3994,7 @@ function openCreativeDetail(id) {
   const found = findCreative(id);
   const creative = found?.creative;
   if (!creative) return;
+  state.approvalClientId = found.client?.id || state.approvalClientId;
   const status = normalizeApprovalStatus(creative.status);
 
   $("#approvalDialogHost").innerHTML = `
@@ -3209,22 +4034,28 @@ function renderCreativeDetailActions(found) {
   const id = creative.id;
   const clientName = found.client?.name || "cliente";
   const status = normalizeApprovalStatus(creative.status);
+  const canManage = canManageWorkspace() && !isClientPortalRoute();
 
   if (status === "prov") {
+    if (!canManage) return `<span class="approval-status prov">${esc(approvalStatuses[status])}</span>`;
     return `
       <button class="krio-btn primary" type="button" data-action="setCreativeStatus" data-id="${attr(id)}" data-status="internalApproved">${icons.check} Aprovado internamente</button>
-      <button class="krio-btn danger" type="button" data-action="setCreativeStatus" data-id="${attr(id)}" data-status="internalRejected">Reprovado internamente</button>
+      <button class="krio-btn danger" type="button" data-action="openInternalRejectionDialog" data-id="${attr(id)}">Solicitar refação</button>
       <button class="krio-icon-btn" type="button" title="Editar" aria-label="Editar" data-action="openCreativeDialog" data-id="${attr(id)}">${icons.edit}</button>
       <button class="krio-icon-btn danger" type="button" title="Excluir" aria-label="Excluir" data-action="deleteCreative" data-id="${attr(id)}">${icons.trash}</button>`;
   }
 
   if (status === "internalApproved") {
+    if (!canManage) return `<span class="approval-status internalApproved">${esc(approvalStatuses[status])}</span>`;
     return `
       <button class="krio-btn primary" type="button" data-action="sendToClientBoard" data-id="${attr(id)}">${icons.send} Mandar para quadro do cliente: ${esc(clientName)}</button>
       <button class="krio-icon-btn" type="button" title="Editar mídia" aria-label="Editar mídia" data-action="openCreativeDialog" data-id="${attr(id)}">${icons.edit}</button>`;
   }
 
   if (status === "internalRejected") {
+    if (!canManage) {
+      return `<button class="krio-btn primary" type="button" data-action="markCreativeCorrected" data-id="${attr(id)}">${icons.check} Corrigido</button>`;
+    }
     return `
       <button class="krio-btn primary" type="button" data-action="markCreativeCorrected" data-id="${attr(id)}">${icons.check} Corrigido</button>
       <button class="krio-icon-btn" type="button" title="Editar" aria-label="Editar" data-action="openCreativeDialog" data-id="${attr(id)}">${icons.edit}</button>
@@ -3236,6 +4067,7 @@ function renderCreativeDetailActions(found) {
   }
 
   if (status === "scheduled") {
+    if (!canManage) return `<span class="approval-status scheduled">${esc(clientPortalHistoryLabel(creative))}</span>`;
     return `
       <button class="krio-btn" type="button" data-action="markCreativePosted" data-id="${attr(id)}">${icons.calendar} Marcar como postado</button>
       <button class="krio-icon-btn" type="button" title="Editar mídia" aria-label="Editar mídia" data-action="openCreativeDialog" data-id="${attr(id)}">${icons.edit}</button>`;
@@ -3253,13 +4085,64 @@ function saveCommentForm(form) {
   creative.comments ||= [];
   creative.comments.push({
     id: newId("comment"),
+    author: isClientPortalRoute() ? (found.client?.name || "Cliente") : (state.user?.displayName || "Equipe"),
+    text,
+    createdAt: Date.now()
+  });
+  if (canManageWorkspace() && !isClientPortalRoute()) {
+    persist();
+  } else {
+    persistCreativeCard(found);
+  }
+  openCreativeDetail(creative.id);
+  if (isClientPortalRoute()) renderClientPortal();
+  else renderApproval();
+}
+
+function openInternalRejectionDialog(id) {
+  const found = findCreative(id);
+  if (!found?.creative) return;
+  $("#approvalDialogHost").innerHTML = `
+    <div class="approval-dialog-backdrop" data-dialog-backdrop>
+      <div class="approval-dialog" role="dialog" aria-modal="true" aria-labelledby="internalRejectionTitle">
+        <div class="approval-dialog-head">
+          <div><strong id="internalRejectionTitle">Solicitar refação</strong><span>${esc(found.client?.name || "Cliente")}</span></div>
+          <button class="krio-icon-btn" type="button" data-action="closeDialog" aria-label="Fechar">${icons.close}</button>
+        </div>
+        <form id="internalRejectionForm" class="approval-form" data-id="${attr(id)}">
+          <label class="approval-field">Feedback obrigatório
+            <textarea class="approval-textarea" name="comment" required placeholder="Descreva o ajuste necessário antes de enviar ao cliente"></textarea>
+          </label>
+          <div class="approval-dialog-actions">
+            <button class="krio-btn" type="button" data-action="closeDialog">Cancelar</button>
+            <button class="krio-btn danger" type="submit">Enviar para refação</button>
+          </div>
+        </form>
+      </div>
+    </div>`;
+}
+
+function saveInternalRejectionForm(form) {
+  const found = findCreative(form.dataset.id);
+  const creative = found?.creative;
+  if (!creative) return;
+  const text = String(new FormData(form).get("comment") || "").trim();
+  if (!text) return;
+  creative.status = "internalRejected";
+  creative.revisionAlert = text;
+  creative.revisionSource = "internal";
+  creative.internalRejectedAt = Date.now();
+  creative.updatedAt = Date.now();
+  creative.comments ||= [];
+  creative.comments.push({
+    id: newId("comment"),
     author: state.user?.displayName || "Equipe",
     text,
     createdAt: Date.now()
   });
-  persist();
-  openCreativeDetail(creative.id);
-  renderApproval();
+  state.approvalStatus = "internalRejected";
+  closeDialogs();
+  saveAndRender();
 }
 
 function setCreativeStatus(id, status) {
@@ -3275,6 +4158,7 @@ function setCreativeStatus(id, status) {
   }
   if (nextStatus === "internalRejected") {
     creative.internalRejectedAt = Date.now();
+    creative.revisionSource = "internal";
   }
   creative.updatedAt = Date.now();
   state.approvalStatus = nextStatus || "prov";
@@ -3294,6 +4178,37 @@ function sendToClientBoard(id) {
   saveAndRender();
 }
 
+function completeCreativeMutation(found, nextStatus = "") {
+  state.approvalStatus = nextStatus || normalizeApprovalStatus(found?.creative?.status || "prov");
+  closeDialogs();
+  if (canManageWorkspace() && !isClientPortalRoute()) {
+    saveAndRender();
+    return;
+  }
+  persistCreativeCard(found);
+  render();
+}
+
+async function persistCreativeCard(found) {
+  if (!found?.client?.id || !found.groupId || !found?.creative?.id) return;
+  markLocalWrite();
+  saveLocalState();
+  if (!state.firebase?.db || state.demoMode || state.tenantId === "local") {
+    releaseLocalWrite(true);
+    setSyncState("online", "Alteracao salva localmente");
+    return;
+  }
+  try {
+    const path = `tenants/${state.tenantId}/approval/clients/${found.client.id}/groups/${found.groupId}/cards/${found.creative.id}`;
+    await state.firebase.set(state.firebase.ref(state.firebase.db, path), JSON.parse(JSON.stringify(found.creative)));
+    releaseLocalWrite(true);
+    setSyncState("online", "Sincronizado");
+  } catch (error) {
+    releaseLocalWrite(false);
+    setSyncState("offline", "Falha ao sincronizar a peça.");
+  }
+}
+
 function clientApproveCreative(id) {
   const found = findCreative(id);
   const creative = found?.creative;
@@ -3302,8 +4217,7 @@ function clientApproveCreative(id) {
   creative.clientApprovedAt = Date.now();
   creative.revisionAlert = "";
   creative.updatedAt = Date.now();
-  state.approvalStatus = "scheduled";
-  saveAndRender();
+  completeCreativeMutation(found, "scheduled");
 }
 
 function openClientRejectionDialog(id) {
@@ -3335,9 +4249,11 @@ function saveClientRejectionForm(form) {
   if (!creative) return;
   const text = String(new FormData(form).get("comment") || "").trim();
   if (!text) return;
-  creative.status = "prov";
+  creative.status = "internalRejected";
   creative.revisionAlert = text;
+  creative.revisionSource = "client";
   creative.clientRejectedAt = Date.now();
+  creative.internalRejectedAt = Date.now();
   creative.updatedAt = Date.now();
   creative.comments ||= [];
   creative.comments.push({
@@ -3346,9 +4262,7 @@ function saveClientRejectionForm(form) {
     text,
     createdAt: Date.now()
   });
-  state.approvalStatus = "prov";
-  closeDialogs();
-  saveAndRender();
+  completeCreativeMutation(found, "internalRejected");
 }
 
 function markCreativeCorrected(id) {
@@ -3359,9 +4273,7 @@ function markCreativeCorrected(id) {
   creative.revisionAlert = "";
   creative.correctedAt = Date.now();
   creative.updatedAt = Date.now();
-  state.approvalStatus = "prov";
-  closeDialogs();
-  saveAndRender();
+  completeCreativeMutation(found, "prov");
 }
 
 function markCreativePosted(id) {
@@ -3529,12 +4441,25 @@ function featureLabel(feature) {
 }
 
 function accessRoleLabel(role) {
-  return { owner: "Owner", admin: "Admin", member: "Colaborador" }[role] || "Colaborador";
+  return {
+    owner: "Gestão — proprietário",
+    admin: "Gestão — acesso integral",
+    creator: "Criador",
+    member: "Criador",
+    operations: "Operação",
+    client: "Cliente",
+    guest: "Convidado"
+  }[role] || "Criador";
 }
 
 function roleRequestLabel(role) {
   return {
     member: "Colaborador",
+    creator: "Criador",
+    operations: "Operação",
+    admin: "Gestão",
+    client: "Cliente",
+    guest: "Convidado",
     designer: "Designer",
     editor_video: "Editor de video",
     fotografo: "Fotografo",
@@ -3556,12 +4481,12 @@ async function approveAccessRequest(uid) {
     color,
     authUid: uid,
     accessUid: uid,
-    accessRole: "member",
+    accessRole: "creator",
     assignedTypes: defaultAssignedDemandTypes(),
     createdAt: now
   };
   const membership = {
-    role: "member",
+    role: "creator",
     status: "active",
     tenantId: state.tenantId,
     updatedAt: now,
@@ -3607,7 +4532,7 @@ async function rejectAccessRequest(uid) {
 
 async function grantWorkspaceMembership(uid, role = "member") {
   if (!state.firebase?.db || state.demoMode || state.tenantId === "local" || !canManageWorkspace()) return;
-  const safeRole = role === "admin" ? "admin" : "member";
+  const safeRole = normalizeAssignableAccessRole(role);
   const payload = {
     role: safeRole,
     status: "active",
@@ -3697,7 +4622,7 @@ function deleteCurrentWeek() {
 
 function toggleDemand(id) {
   const found = findDemand(id);
-  if (!found) return;
+  if (!found || !canManageDemand(found.personId)) return;
   if (!found.demand.done) {
     openCompleteDemandDialog(id);
     return;
@@ -3710,7 +4635,7 @@ function toggleDemand(id) {
 function openCompleteDemandDialog(id) {
   const found = findDemand(id);
   const demand = found?.demand;
-  if (!demand) return;
+  if (!demand || !canManageDemand(found.personId)) return;
   $("#trackerDialogHost").innerHTML = `
     <div class="tracker-dialog-backdrop" data-dialog-backdrop>
       <div class="tracker-dialog" role="dialog" aria-modal="true" aria-labelledby="completeDemandTitle">
@@ -3743,7 +4668,7 @@ function openCompleteDemandDialog(id) {
 function saveCompleteDemandForm(form) {
   const found = findDemand(form.dataset.id);
   const demand = found?.demand;
-  if (!demand) return;
+  if (!demand || !canManageDemand(found.personId)) return;
   const formData = new FormData(form);
   stopDemandTimer(demand);
   demand.done = true;
@@ -3757,7 +4682,7 @@ function saveCompleteDemandForm(form) {
 function deleteDemand(id) {
   const found = findDemand(id);
   if (!found) return;
-  if (!canViewPerson(found.personId)) return;
+  if (!canManageDemand(found.personId)) return;
   removeDemandFromWeek(found.week, found.personId, found.type, id);
   state.data.tracker.trash.unshift({
     ...found.demand,
@@ -3783,8 +4708,9 @@ function restoreDemand(id) {
   const [item] = state.data.tracker.trash.splice(index, 1);
   const week = state.data.tracker.weeks.find((candidate) => candidate.id === item.sourceWeekId) || currentWeek();
   const personId = canManageWorkspace()
-    ? (getProfile(item.sourcePersonId) ? item.sourcePersonId : getProfiles()[0].id)
+    ? (getProfile(item.sourcePersonId) && isCreatorProfile(getProfile(item.sourcePersonId)) ? item.sourcePersonId : getCreatorProfiles()[0]?.id)
     : currentPersonId();
+  if (!personId) return;
   const type = demandTypes.some((candidate) => candidate.id === item.sourceType) ? item.sourceType : "mensal";
   ensureWeekPerson(week, personId);
   delete item.deletedAt;
@@ -3835,11 +4761,11 @@ function purgeTrash() {
 function toggleTimer(id) {
   const found = findDemand(id);
   if (!found) return;
-  if (!canViewPerson(found.personId)) return;
+  if (!canManageDemand(found.personId)) return;
   if (found.demand.runningStartedAt) {
     stopDemandTimer(found.demand);
   } else {
-    getAllDemandRefs().forEach(({ demand }) => stopDemandTimer(demand));
+    (canManageWorkspace() ? getAllDemandRefs() : getVisibleDemandRefs()).forEach(({ demand }) => stopDemandTimer(demand));
     found.demand.runningStartedAt = Date.now();
     found.demand.done = false;
   }
@@ -3855,7 +4781,7 @@ function stopDemandTimer(demand) {
 
 function resetDemandTime(id) {
   const found = findDemand(id);
-  if (!found) return;
+  if (!found || !canManageDemand(found.personId)) return;
   found.demand.timeMinutes = 0;
   found.demand.runningStartedAt = null;
   saveAndRender();
@@ -3863,7 +4789,7 @@ function resetDemandTime(id) {
 
 function cycleDemandDifficulty(id, button = null) {
   const found = findDemand(id);
-  if (!found) return;
+  if (!found || !canManageDemand(found.personId)) return;
   const order = ["none", "some", "hard"];
   const current = order.indexOf(found.demand.difficulty || "none");
   const next = order[(current + 1) % order.length];
@@ -3878,7 +4804,7 @@ function cycleDemandDifficulty(id, button = null) {
 function moveTrackerDemand(id, targetPersonId, targetType, targetId = "", insertAfter = false) {
   if (!id || !targetPersonId || !targetType || !demandTypes.some((type) => type.id === targetType)) return;
   const found = findDemand(id);
-  if (!found) return;
+  if (!found || !canManageDemand(found.personId) || !canManageDemand(targetPersonId)) return;
 
   const week = found.week;
   const sourceList = week.people?.[found.personId]?.[found.type] || [];
@@ -3903,7 +4829,7 @@ function moveTrackerDemand(id, targetPersonId, targetType, targetId = "", insert
 function openTimerEditDialog(id) {
   const found = findDemand(id);
   const demand = found?.demand;
-  if (!demand) return;
+  if (!demand || !canManageDemand(found.personId)) return;
   const minutes = effectiveMinutes(demand);
   $("#trackerDialogHost").innerHTML = `
     <div class="tracker-dialog-backdrop" data-dialog-backdrop>
@@ -3932,7 +4858,7 @@ function openTimerEditDialog(id) {
 function saveTimerEditForm(form) {
   const found = findDemand(form.dataset.id);
   const demand = found?.demand;
-  if (!demand) return;
+  if (!demand || !canManageDemand(found.personId)) return;
   const formData = new FormData(form);
   demand.timeMinutes = parseDurationToMinutes(String(formData.get("timeText") || ""));
   demand.runningStartedAt = form.dataset.wasRunning === "1" && !demand.done ? Date.now() : null;
@@ -3943,7 +4869,7 @@ function saveTimerEditForm(form) {
 function openDemandNoteDialog(id) {
   const found = findDemand(id);
   const demand = found?.demand;
-  if (!demand) return;
+  if (!demand || !canManageDemand(found.personId)) return;
   $("#trackerDialogHost").innerHTML = `
     <div class="tracker-dialog-backdrop" data-dialog-backdrop>
       <div class="tracker-dialog tracker-dialog-compact" role="dialog" aria-modal="true" aria-labelledby="demandNoteTitle">
@@ -3971,7 +4897,7 @@ function openDemandNoteDialog(id) {
 function saveDemandNoteForm(form) {
   const found = findDemand(form.dataset.id);
   const demand = found?.demand;
-  if (!demand) return;
+  if (!demand || !canManageDemand(found.personId)) return;
   const formData = new FormData(form);
   demand.notes = String(formData.get("notes") || "").trim();
   closeDialogs();
@@ -3990,6 +4916,7 @@ function moveAgenda(delta) {
 }
 
 function openAgendaEventDialog(id = "", date = "") {
+  if (!canEditAgenda()) return;
   const event = id ? getAgendaEvent(id) : null;
   const selectedDate = event?.date || date || state.agendaCursor || isoDate(new Date());
   $("#trackerDialogHost").innerHTML = `
@@ -4035,6 +4962,7 @@ function openAgendaEventDialog(id = "", date = "") {
 }
 
 function saveAgendaEventForm(form) {
+  if (!canEditAgenda()) return;
   const formData = new FormData(form);
   const id = form.dataset.id || newId("event");
   const title = String(formData.get("title") || "").trim();
@@ -4064,6 +4992,7 @@ function saveAgendaEventForm(form) {
 }
 
 function deleteAgendaEvent(id) {
+  if (!canEditAgenda()) return;
   state.data.tracker.events = asArray(state.data.tracker.events).filter((event) => event.id !== id);
   closeDialogs();
   saveAndRender();
@@ -4074,7 +5003,7 @@ function getAgendaEvent(id) {
 }
 
 function exportTracker() {
-  const rows = getAllDemandRefs().map(({ week, person, demand }) => ({
+  const rows = getCreatorDemandRefs().map(({ week, person, demand }) => ({
     semana: week.title,
     responsavel: person.name,
     tipo: demand.type,
@@ -4129,9 +5058,9 @@ function downloadReportHtml() {
 }
 
 function buildTrackerReportHTML(week) {
-  const refs = getWeekDemandRefs(week);
-  const stats = getWeekStats(week);
-  const people = getProfiles();
+  const refs = getCreatorWeekDemandRefs(week);
+  const stats = getWeekStats(week, refs);
+  const people = getCreatorProfiles();
   const generatedAt = new Date().toLocaleString("pt-BR");
   const rowsByPerson = people.map((person) => {
     const personRefs = refs.filter((ref) => ref.person.id === person.id);
@@ -4149,13 +5078,14 @@ function buildTrackerReportHTML(week) {
   :root{--ink:#172033;--muted:#667085;--line:#D8DEE9;--brand:#2563EB;--soft:#F4F7FB;--green:#059669;--orange:#D97706;--red:#DC2626}
   *{box-sizing:border-box}
   body{margin:0;background:#EEF2F7;color:var(--ink);font-family:Arial,Helvetica,sans-serif;-webkit-print-color-adjust:exact;print-color-adjust:exact}
-  .page{width:1120px;min-height:780px;margin:24px auto;background:#fff;border:1px solid var(--line);border-radius:22px;padding:30px;box-shadow:0 24px 80px rgba(23,32,51,.12)}
+  .page{max-width:1100px;width:calc(100% - 32px);min-height:780px;margin:24px auto;background:#fff;border:1px solid var(--line);border-radius:22px;padding:30px;box-shadow:0 24px 80px rgba(23,32,51,.12)}
+  @media(max-width:700px){.kpis{grid-template-columns:repeat(2,1fr)!important}.page{padding:16px;border-radius:12px}}
   header{display:flex;align-items:flex-start;justify-content:space-between;border-bottom:1px solid var(--line);padding-bottom:20px;margin-bottom:20px}
   .brand{display:flex;gap:14px;align-items:center}.mark{width:42px;height:42px;border-radius:12px;background:linear-gradient(135deg,#2563EB,#60A5FA);color:#fff;display:grid;place-items:center;font-weight:800}
   h1{margin:0;font-size:28px;letter-spacing:-.04em}.sub{margin-top:5px;color:var(--muted);font-size:13px}
   .kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:20px}.kpi{background:var(--soft);border:1px solid var(--line);border-radius:14px;padding:14px}.kpi span{display:block;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.08em}.kpi strong{display:block;margin-top:6px;font-size:24px}
   .person{break-inside:avoid;border:1px solid var(--line);border-radius:16px;margin-top:14px;overflow:hidden}.person-head{display:flex;justify-content:space-between;gap:12px;background:#F8FAFC;padding:12px 14px;border-bottom:1px solid var(--line)}.person-head strong{font-size:15px}.person-head span{color:var(--muted);font-size:12px}
-  table{width:100%;border-collapse:collapse;font-size:12px}th,td{text-align:left;border-bottom:1px solid #EDF1F6;padding:9px 10px;vertical-align:top}th{color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.08em}tr:last-child td{border-bottom:0}
+  table{width:100%;border-collapse:collapse;font-size:12px;table-layout:fixed}th,td{text-align:left;border-bottom:1px solid #EDF1F6;padding:9px 10px;vertical-align:top;word-break:break-word}th{color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.08em}tr:last-child td{border-bottom:0}
   .tag{display:inline-block;border-radius:999px;padding:2px 7px;background:#EAF2FF;color:var(--brand);font-weight:700;font-size:10px}.done{color:var(--green)}.pend{color:var(--orange)}.hard{color:var(--red)}
   .no-print{display:flex;justify-content:center;margin:18px auto}.no-print button{border:0;border-radius:12px;background:var(--brand);color:#fff;font-weight:800;padding:12px 20px;cursor:pointer}
   @media print{ @page{size:A4 landscape;margin:0} body{background:#fff}.page{width:100vw;min-height:100vh;margin:0;border:0;border-radius:0;box-shadow:none}.no-print{display:none!important} }
@@ -4227,7 +5157,7 @@ async function persistNow() {
   const localSaved = saveLocalState();
   if (!state.firebase?.db || state.demoMode || state.tenantId === "local") {
     releaseLocalWrite(true);
-    setSyncState(localSaved ? "online" : "offline", localSaved ? "Dados salvos localmente" : "Copia local cheia. Alteracoes mantidas nesta sessao.");
+    setSyncState(localSaved ? "online" : "offline", localSaved ? "Dados salvos localmente" : "Cópia local cheia. Alterações mantidas nesta sessão.");
     return;
   }
 
@@ -4238,7 +5168,8 @@ async function persistNow() {
       ...(canManageWorkspace() ? { [`tenants/${state.tenantId}/profiles`]: state.data.profiles } : {}),
       [`tenants/${state.tenantId}/tracker/weeks`]: state.data.tracker.weeks,
       [`tenants/${state.tenantId}/tracker/events`]: state.data.tracker.events || [],
-      [`tenants/${state.tenantId}/approval`]: state.data.approval,
+      ...(canManageWorkspace() ? { [`tenants/${state.tenantId}/approval`]: state.data.approval } : {}),
+      ...(canManageWorkspace() ? buildApprovalPortalPayload() : {}),
       [canManageWorkspace() ? `tenants/${state.tenantId}/trash` : `tenants/${state.tenantId}/trash/${state.user.uid}`]: trashPayload,
       [`tenants/${state.tenantId}/updatedAt`]: Date.now()
     }));
@@ -4262,6 +5193,20 @@ function buildTrashPayload() {
     acc[uid] ||= {};
     acc[uid][item.id] = item;
     return acc;
+  }, {});
+}
+
+function buildApprovalPortalPayload() {
+  return getClients().reduce((payload, client) => {
+    if (client.portalEnabled === false) return payload;
+    payload[`approvalPortals/${client.id}`] = {
+      tenantId: state.tenantId,
+      clientId: client.id,
+      clientName: client.name || "Cliente",
+      workspaceName: state.tenantMeta?.name || state.data?.meta?.name || "Krio",
+      updatedAt: Date.now()
+    };
+    return payload;
   }, {});
 }
 
@@ -4326,7 +5271,7 @@ function normalizeTenant(raw, user) {
       role: profile.role || "Equipe",
       color: profile.color || colorFromString(profile.name || id),
       accessUid: profile.accessUid || (/^person_/.test(id) ? "" : id),
-      accessRole: ["admin", "member"].includes(profile.accessRole) ? profile.accessRole : "member",
+      accessRole: validAccessRoles.has(profile.accessRole) ? profile.accessRole : "member",
       assignedTypes: Array.isArray(profile.assignedTypes) ? profile.assignedTypes : defaultAssignedDemandTypes()
     };
   });
@@ -4337,6 +5282,7 @@ function normalizeTenant(raw, user) {
       name: user.displayName || user.email?.split("@")[0] || "Usuário",
       role: "Owner",
       color: "#3B82F6",
+      accessRole: "admin",
       assignedTypes: defaultAssignedDemandTypes()
     };
   }
@@ -4382,7 +5328,7 @@ function normalizeProfiles(rawProfiles, user = state.user) {
       color: profile.color || colorFromString(profile.name || id),
       logoUrl: profile.logoUrl || "",
       accessUid: profile.accessUid || (/^person_/.test(id) ? "" : id),
-      accessRole: ["admin", "member"].includes(profile.accessRole) ? profile.accessRole : "member",
+      accessRole: validAccessRoles.has(profile.accessRole) ? profile.accessRole : "member",
       assignedTypes: Array.isArray(profile.assignedTypes) ? profile.assignedTypes : defaultAssignedDemandTypes()
     };
   });
@@ -4541,6 +5487,10 @@ function normalizeApprovalClient(client = {}, id = newId("client")) {
     email: client.email || "",
     color: client.color || colorFromString(client.name || id),
     logoUrl: client.logoUrl || "",
+    portalEnabled: client.portalEnabled !== false,
+    portalCreatedAt: client.portalCreatedAt || client.createdAt || Date.now(),
+    portalUpdatedAt: client.portalUpdatedAt || client.updatedAt || Date.now(),
+    briefings: asArray(client.briefings),
     groups: normalizeObjectCollection(client.groups)
   };
 
@@ -4613,10 +5563,11 @@ function seedData(user) {
       id: userId,
       name: user?.displayName || user?.email?.split("@")[0] || "Linniker",
       role: "Owner",
-      color: "#3B82F6"
+      color: "#3B82F6",
+      accessRole: "admin"
     },
-    person_design: { id: "person_design", name: "Ana Design", role: "Designer", color: "#A78BFA" },
-    person_social: { id: "person_social", name: "Bruno Social", role: "Social media", color: "#34D399" }
+    person_design: { id: "person_design", name: "Ana Design", role: "Designer", color: "#A78BFA", accessRole: "creator" },
+    person_social: { id: "person_social", name: "Bruno Social", role: "Social media", color: "#34D399", accessRole: "creator" }
   };
 
   const week = createWeek(start, profiles);
@@ -4771,6 +5722,14 @@ function getVisibleDemandRefs() {
   return state.data.tracker.weeks.flatMap((week) => getVisibleWeekDemandRefs(week));
 }
 
+function getCreatorWeekDemandRefs(week) {
+  return getWeekDemandRefs(week).filter(({ person }) => isCreatorProfile(person));
+}
+
+function getCreatorDemandRefs() {
+  return getAllDemandRefs().filter(({ person }) => isCreatorProfile(person));
+}
+
 function findDemand(id) {
   return getAllDemandRefs().find(({ demand }) => demand.id === id);
 }
@@ -4797,6 +5756,26 @@ function getClient(id) {
   return state.data.approval.clients?.[id] || null;
 }
 
+function clientPortalUrl(client) {
+  const id = typeof client === "string" ? client : client?.id || "";
+  const origin = window.location.origin && window.location.origin !== "null"
+    ? window.location.origin
+    : window.location.href.replace(/\/[^/]*$/, "");
+  const suffix = state.demoMode ? "?demo=1" : "";
+  return `${origin}/approval/${encodeURIComponent(id)}${suffix}`;
+}
+
+async function copyClientPortalLink(clientId) {
+  const client = getClient(clientId);
+  if (!client) return;
+  const url = clientPortalUrl(client);
+  try {
+    await navigator.clipboard?.writeText(url);
+    setSyncState("online", "Link do portal copiado");
+  } catch {
+    window.prompt("Copie o link do portal", url);
+  }
+}
 function getClientFolders() {
   return Object.values(state.data.approval.clientFolders || {}).map((folder) => ({
     ...folder,
@@ -4956,7 +5935,14 @@ function getCreative(id) {
 }
 
 function findCreative(id, client = getClient(state.approvalClientId)) {
-  if (!id || !client) return null;
+  if (!id) return null;
+  if (!client) {
+    for (const candidate of getClients()) {
+      const found = findCreative(id, candidate);
+      if (found) return found;
+    }
+    return null;
+  }
   for (const group of getApprovalGroups(client)) {
     const creative = group.cards?.[id];
     if (creative) return { client, group, groupId: group.id, creative };
@@ -4970,6 +5956,26 @@ function countCreativesByStatus(creatives) {
     acc[status] = (acc[status] || 0) + 1;
     return acc;
   }, { prov: 0, internalApproved: 0, internalRejected: 0, clientReview: 0, scheduled: 0, posted: 0 });
+}
+
+function getApprovalQueueStats() {
+  return getClients().reduce((acc, client) => {
+    getCreatives(client).forEach((creative) => {
+      const status = normalizeApprovalStatus(creative.status);
+      acc[status] = (acc[status] || 0) + 1;
+    });
+    return acc;
+  }, { prov: 0, internalApproved: 0, internalRejected: 0, clientReview: 0, scheduled: 0, posted: 0 });
+}
+
+function getRefactionCreatives() {
+  return getClients()
+    .flatMap((client) => getApprovalGroups(client).flatMap((group) => {
+      return getGroupCards(group)
+        .filter((creative) => normalizeApprovalStatus(creative.status) === "internalRejected")
+        .map((creative) => ({ client, group, groupId: group.id, creative }));
+    }))
+    .sort((a, b) => Number(b.creative.updatedAt || 0) - Number(a.creative.updatedAt || 0));
 }
 
 function syncPostedCreatives() {
@@ -5215,7 +6221,7 @@ function saveLocalState() {
     localStorage.setItem(storageKey(), JSON.stringify(state.data));
     return true;
   } catch (error) {
-    setSyncState("offline", "Copia local cheia. O Firebase continua sendo sincronizado quando disponivel.");
+    setSyncState("offline", "Cópia local cheia. O Firebase continua sendo sincronizado quando disponível.");
     return false;
   }
 }

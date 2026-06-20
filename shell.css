@@ -803,6 +803,33 @@ body { padding: 0; }
   animation: krio-rise 0.24s var(--ease-snap, cubic-bezier(0.16,1,0.3,1)) both;
 }
 
+/* Client approval route */
+.client-portal-shell {
+  grid-template-columns: minmax(0, 1fr);
+  background:
+    radial-gradient(circle at 12% 0%, rgba(59,130,246,0.12), transparent 32%),
+    radial-gradient(circle at 88% 12%, rgba(52,211,153,0.08), transparent 30%),
+    var(--page);
+}
+
+.client-portal-shell .app-sidebar,
+.client-portal-shell .app-topbar,
+.client-portal-shell .page-subtitle,
+.client-portal-shell #dashboardModuleMount,
+.client-portal-shell #trackerModuleMount,
+.client-portal-shell #operationsModuleMount {
+  display: none !important;
+}
+
+.client-portal-shell .app-body {
+  min-height: 100dvh;
+}
+
+.client-portal-shell .main {
+  width: min(1120px, 100%);
+  padding: 42px 20px 72px;
+}
+
 .module-mount { min-width: 0; }
 
 /* ─────────────────────────────────────────

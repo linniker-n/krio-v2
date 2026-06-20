@@ -2,14 +2,16 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { chromium } from "playwright";
 
-const rootUrl = process.env.KRIO_SMOKE_URL || "http://127.0.0.1:8000";
+const smokePort = process.env.KRIO_SMOKE_PORT || "8131";
+const rootUrl = process.env.KRIO_SMOKE_URL || `http://127.0.0.1:${smokePort}`;
 const appSmokePath = process.env.KRIO_SMOKE_URL ? "/app/" : "/app/index.html";
 let server;
 
 if (!process.env.KRIO_SMOKE_URL) {
-  server = spawn("py", ["-3", "-m", "http.server", "8000", "--bind", "127.0.0.1"], {
+  server = spawn(process.execPath, ["scripts/dev-server.cjs"], {
     stdio: "ignore",
-    shell: false
+    shell: false,
+    env: { ...process.env, PORT: smokePort, HOST: "127.0.0.1" }
   });
   await wait(900);
 }
@@ -18,6 +20,7 @@ const browser = await chromium.launch({ headless: true });
 
 try {
   await desktopSmoke(browser);
+  await clientPortalSmoke(browser);
   await mobileSmoke(browser);
   console.log("smoke ok");
 } finally {
@@ -52,6 +55,30 @@ async function desktopSmoke(browser) {
 
   await page.close();
   assertNoErrors(errors);
+}
+
+async function clientPortalSmoke(browser) {
+  const page = await browser.newPage({ viewport: { width: 1366, height: 900 } });
+  const errors = collectErrors(page);
+
+  await page.goto(`${rootUrl}/approval/client_alpha?demo=1`, { waitUntil: "networkidle" });
+  await page.locator("#appShell").waitFor({ state: "visible" });
+  await page.locator(".client-portal").waitFor({ state: "visible" });
+
+  const result = await page.evaluate(() => ({
+    bodyClient: document.body.classList.contains("role-client"),
+    shellClient: document.querySelector("#appShell")?.classList.contains("client-portal-shell"),
+    sidebarHidden: getComputedStyle(document.querySelector(".app-sidebar")).display === "none",
+    topbarHidden: getComputedStyle(document.querySelector(".app-topbar")).display === "none",
+    hasVisibleTrackerTab: Array.from(document.querySelectorAll(".app-tab")).some((button) => button.offsetParent !== null && button.textContent.includes("Tracker")),
+    title: document.querySelector(".client-portal h1")?.textContent?.trim() || ""
+  }));
+
+  await page.close();
+  assertNoErrors(errors);
+  if (!result.bodyClient || !result.shellClient || !result.sidebarHidden || !result.topbarHidden || result.hasVisibleTrackerTab || result.title !== "Cliente Alpha") {
+    throw new Error(`client portal route failed: ${JSON.stringify(result)}`);
+  }
 }
 
 async function mobileSmoke(browser) {
