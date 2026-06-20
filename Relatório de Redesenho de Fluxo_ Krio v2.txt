@@ -1,0 +1,109 @@
+# Relatório de Redesenho de Fluxo: Krio v2
+
+Este relatório apresenta uma análise profunda do repositório **Krio v2** e propõe um redesenho estratégico para otimizar a usabilidade antes do lançamento oficial, alinhado com a dinâmica operacional de agências de publicidade e marketing de pequeno e médio porte. O objetivo é transformar uma aplicação de "shell único" em uma plataforma orientada por jornadas de usuário que reflitam os papéis e fluxos de trabalho típicos de uma agência.
+
+---
+
+## 1. Diagnóstico da Arquitetura Atual
+
+A análise do código-fonte e das regras do banco de dados revelou que o Krio v2 opera sob um modelo de **módulos internos** em vez de **jornadas de usuário** claras. Embora existam diferenciações de acesso por `role` (`owner`, `admin`, `member`), a experiência do usuário não é otimizada para os fluxos de trabalho específicos de uma agência.
+
+### Limitações de Usabilidade Identificadas
+A tabela abaixo resume os principais atritos encontrados na versão atual, sob a ótica de uma agência PME:
+
+| Componente | Estado Atual | Problema de UX para Agências PME |
+| :--- | :--- | :--- |
+| **Navegação** | Abas fixas (`Tracker`, `Operação`, `Aprovação`) | Mistura ferramentas de gestão estratégica (Admin) com execução diária (Criação) e comunicação (Atendimento), gerando sobrecarga cognitiva. |
+| **Papéis** | Baseadas em `role` (`owner`, `admin`, `member`) | Não há um papel explícito para o **Cliente** ou para o **Atendimento/Tráfego**, que são cruciais na ponte entre a agência e o cliente. |
+| **Aprovação** | Aba interna dentro do app autenticado | Exige que o cliente navegue por interfaces complexas da agência, ou que o Atendimento faça o papel de "ponte" de forma ineficiente. |
+| **Fluxo de Refação** | Não explícito | A gestão de peças reprovadas e o retorno para a equipe de criação não são fluidos, podendo gerar gargalos e atrasos. |
+| **Entrada de Demandas** | Não explícito | O processo de coleta de briefing e atribuição de tarefas não está claramente integrado ou otimizado na interface. |
+
+> "A estrutura atual, embora funcional, não espelha a realidade de uma agência, onde a comunicação e a aprovação são processos bem definidos e segmentados por papéis. Isso pode levar a ineficiências e atritos na experiência do usuário."
+
+---
+
+## 2. Nova Proposta: Jornadas Especializadas para Agências PME
+
+O redesenho propõe a divisão do Krio em três dashboards distintos, cada um com foco total na necessidade da persona e alinhado aos fluxos de trabalho de uma agência de publicidade/marketing.
+
+### A. Dashboard Gestor/Atendimento (O Cérebro e a Ponte da Agência)
+Focado em visão estratégica, gestão de clientes e acompanhamento de aprovações.
+-   **Home/Visão Geral:** KPIs de produtividade (demandas atrasadas vs. entregues), status de aprovações pendentes e visão consolidada dos clientes.
+-   **Gestão de Clientes:** Interface centralizada para criar novos clientes, gerenciar suas informações e **gerar links exclusivos para o Portal do Cliente**. Inclui a funcionalidade de **registrar novos briefings** e atribuir demandas à equipe de Criação/Produção.
+-   **Módulo de Aprovação (Interna):** Visão do `Tracker` e `Aprovação` com foco nas peças que precisam de aprovação interna antes de serem enviadas ao cliente. Permite a gestão de prazos e o envio para o cliente.
+-   **Relatórios:** Visão estratégica de rentabilidade, desempenho da equipe e histórico de operações.
+
+### B. Dashboard Criação/Produção (O Motor de Execução)
+Focado em execução de tarefas, prazos e gestão de refações.
+-   **Minhas Demandas:** Visão do `Tracker` filtrada automaticamente para as demandas atribuídas ao usuário logado, com status e prazos claros. As demandas são recebidas do Tráfego/Gestor.
+-   **Inbox de Refação:** Notificações em tempo real de peças reprovadas (interna ou externamente) que precisam de ajuste imediato, com histórico de comentários e feedbacks.
+-   **Lixeira Pessoal:** Acesso rápido a itens excluídos por ele mesmo.
+
+### C. Portal do Cliente (Krio Guest - A Experiência de Aprovação Simplificada)
+Uma interface ultra-clean e simplificada, dedicada exclusivamente ao processo de aprovação do cliente.
+-   **Acesso Sem Atrito:** Link direto e exclusivo (ex: `/approval/:clientId`) que não exige que o cliente navegue pelo sistema interno da agência. Não há sidebar, topbar de módulos ou qualquer acesso ao `Tracker`.
+-   **Checklist de Aprovação:** Lista clara e objetiva de peças pendentes de revisão, com botões de ação imediata: **Aprovar** ou **Solicitar Ajuste** (com campo para feedback obrigatório).
+-   **Histórico de Aprovações:** Acesso rápido apenas ao que já foi aprovado ou reprovado, com a versão final da peça e o feedback associado.
+
+---
+
+## 3. Fluxo Operacional da Agência no Krio v2
+
+O diagrama abaixo ilustra o fluxo de trabalho revisado, espelhando a dinâmica de uma agência PME, desde a entrada da demanda até a publicação:
+
+![Fluxo Operacional da Agência no Krio v2](https://private-us-east-1.manuscdn.com/sessionFile/u2g7Q2okNTZ7QQwGpBFj4A/sandbox/mgoUbgVdDOG1zXbG85fEto-images_1781014450638_na1fn_L2hvbWUvdWJ1bnR1L2tyaW9fZnVsbF9hZ2VuY3lfZmxvdw.png?Policy=eyJTdGF0ZW1lbnQiOlt7IlJlc291cmNlIjoiaHR0cHM6Ly9wcml2YXRlLXVzLWVhc3QtMS5tYW51c2Nkbi5jb20vc2Vzc2lvbkZpbGUvdTJnN1Eyb2tOVFo3UVF3R3BCRmo0QS9zYW5kYm94L21nb1ViZ1ZkRE9HMXpYYkc4NWZFdG8taW1hZ2VzXzE3ODEwMTQ0NTA2MzhfbmExZm5fTDJodmJXVXZkV0oxYm5SMUwydHlhVzlmWm5Wc2JGOWhaMlZ1WTNsZlpteHZkdy5wbmciLCJDb25kaXRpb24iOnsiRGF0ZUxlc3NUaGFuIjp7IkFXUzpFcG9jaFRpbWUiOjE3OTg3NjE2MDB9fX1dfQ__&Key-Pair-Id=K2HSFNDJXOU9YS&Signature=cBUL4U9H1Egse5xMOrghJvlrHvYYC1j-DsH2Xdh92tfI9MtZYtWweb4mWH6rO81JT9-4ZP26vtHHMAvr94cs77avDF7YKd3fbNy3K5mMMsUsAsxyghK48a3-fC-xurbqHDVDBSnzcAcXhwj12UuLRZ5iCHOoSoytB9zzsvFejL2MfmN7nQ~xMID8dek~l0qsYp1TgQTRygZNFTOYuUgZmqsMICw-8cG1hYmzxSVL-9e0m9XpK8nVg4GWTt64x7iJ78j-M~BmU3CPkr737n1SiSg0GxoZPFtrtz3Ak0tIIymdJIuvAqhgOhEnh99wBgKLzomIOBqhlux6CE7xgtCJ2A__)
+
+**Explicação do Fluxo:**
+1.  **Briefing/Entrada de Demanda:** O **Cliente** solicita uma demanda ou envia um briefing. O **Atendimento** coleta e organiza essas informações. O **Tráfego/Gestor** avalia o briefing, planeja a execução e atribui a tarefa à equipe de Criação/Produção no `Tracker`.
+2.  **Criação/Produção:** A equipe de **Criação** produz a peça com base no briefing e a marca como "Pronta para Aprovação Interna" no `Tracker`.
+3.  **Aprovação Interna (Tráfego/Diretor):** O **Gestor** ou **Diretor** revisa a peça. Se **reprovada**, volta para a Criação com feedback detalhado. Se **aprovada**, avança para o Atendimento.
+4.  **Atendimento:** O **Atendimento** recebe a peça aprovada internamente e a envia para o cliente através do Portal do Cliente. A peça muda para o status "Quadro do Cliente".
+5.  **Revisão do Cliente:** O **Cliente** acessa o Portal do Cliente. Se **solicitar ajuste**, a peça volta para a Criação com feedback detalhado. Se **aprovar**, a peça segue para Agendamento.
+6.  **Agendamento/Publicação:** A peça aprovada pelo cliente é agendada para publicação e, posteriormente, movida para o status "Postado/Finalizado".
+
+---
+
+## 4. Guia de Implementação para o Codex
+
+Para que o Codex realize as alterações necessárias, utilize o prompt estruturado abaixo, que reflete as jornadas e papéis revisados:
+
+### Prompt de Implementação
+```text
+Refatore o sistema de roteamento e o Shell do Krio v2 (app-shell.js) para implementar jornadas por persona, alinhadas ao fluxo de uma agência de publicidade PME:
+
+1.  **ADMIN/GESTOR (membership.role: 'owner' ou 'admin'):**
+    *   Habilita todas as abas: 'Tracker', 'Operação' e 'Aprovação'.
+    *   Na sidebar, adicione um botão fixo para 'Gestão de Clientes' (para gerar links de acesso ao cliente e **registrar novos briefings/demandas**).
+    *   A visão padrão ao logar deve ser um 'Dashboard Geral' (nova view ou adaptação da 'Home' atual) com KPIs e status de aprovações.
+
+2.  **MEMBRO/CRIAÇÃO (membership.role: 'member'):**
+    *   Redireciona para a aba 'Tracker' como visão padrão, filtrada automaticamente por 'currentPersonId' (Minhas Demandas). As demandas devem ser visivelmente atribuídas pelo Tráfego/Gestor.
+    *   Oculta a aba 'Operação' e 'Gestão de Clientes' na sidebar.
+    *   Adicione um 'Inbox de Refação' na sidebar, que liste peças com status 'internalRejected' ou 'clientReview' que foram reprovadas e precisam de atenção.
+
+3.  **CLIENTE (NOVO PAPEL: 'client' ou 'guest', com rota dedicada):**
+    *   Crie uma nova rota/view '/approval/:clientId' (Krio Guest).
+    *   Esta visão deve carregar exclusivamente o 'renderClientApprovalBoard', removendo completamente a sidebar, a topbar de módulos e qualquer acesso ao Tracker ou Operação.
+    *   A interface deve ser ultra-clean, focada apenas na lista de peças para aprovação/reprovação e histórico.
+
+**Ajuste a função 'render()'** para injetar classes CSS específicas no elemento `<body>` (ex: `body.role-admin`, `body.role-member`, `body.role-client`) conforme o papel logado. Isso permitirá que o CSS esconda elementos de interface desnecessários para cada perfil, sem quebrar a lógica do Firebase ou do JavaScript.
+
+**Modifique as regras do Firebase (database.rules.json)** para:
+*   Permitir que um novo papel 'client' (ou 'guest') tenha permissão de **leitura** apenas no nó de 'approval' vinculado ao seu `clientId` específico.
+*   Permitir que o 'client' possa **escrever** (atualizar status e adicionar comentários) apenas nas peças que estão em 'clientReview' e que pertencem ao seu `clientId`.
+```
+
+---
+
+## 5. Próximos Passos (Checklist de Lançamento)
+
+-   [ ] **Implementação da Entrada de Demandas:** Desenvolver a funcionalidade para o Atendimento/Gestor registrar briefings e atribuir tarefas no `Tracker`.
+-   [ ] **Isolamento de CSS:** Criar um arquivo `client-portal.css` para a visão do cliente, garantindo que a interface seja mínima e focada.
+-   [ ] **Regras de Segurança no Firebase:** Atualizar `database.rules.json` para implementar as permissões detalhadas para o novo papel `client` (leitura restrita e escrita controlada).
+-   [ ] **Simplificação de Sidebar e Topbar:** Implementar as lógicas de ocultação de elementos da interface via CSS e JavaScript conforme o papel do usuário.
+-   [ ] **Criação do Dashboard Geral:** Desenvolver a nova `Home` para o papel `ADMIN/GESTOR` com os KPIs relevantes.
+-   [ ] **Desenvolvimento do Inbox de Refação:** Criar a funcionalidade para o `MEMBRO/CRIAÇÃO` visualizar rapidamente as peças que precisam de ajuste.
+
+---
+**Documentação revisada e preparada para lançamento imediato, com foco na realidade operacional de agências PME.**
