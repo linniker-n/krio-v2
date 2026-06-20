@@ -21,7 +21,7 @@ const views = {
     subtitle: "Leitura operacional em tempo real."
   },
   approval: {
-    title: "Aprovação",
+    title: "Clientes",
     subtitle: "Clientes, peças e retornos centralizados."
   }
 };
@@ -97,6 +97,7 @@ const state = {
   trackerView: "week",
   trackerFilter: "all",
   currentWeekIndex: 0,
+  approvalOpenClientFolders: {},
   agendaView: "month",
   agendaCursor: isoDate(new Date()),
   approvalClientId: null,
@@ -108,6 +109,7 @@ const state = {
   localWritePending: false,
   localWriteBlockUntil: 0,
   trackerDrag: null,
+  approvalDrag: null,
   accessRequests: [],
   demoMode: new URLSearchParams(window.location.search).has("demo")
 };
@@ -496,6 +498,7 @@ async function loadTenantForUser(user) {
   state.tenantMeta = tenant.meta || {};
   const localCopy = loadLocalState();
   state.data = normalizeTenant(localCopy || tenant, user);
+  await ensureWorkspaceInviteCode();
 
   if (!asArray(tenant.tracker?.weeks).length || localCopy) {
     await persistNow();
@@ -554,18 +557,140 @@ async function registerAccessRequestFromApp(user) {
   const requestSnap = await fb.get(requestRef);
   const current = requestSnap.val() || {};
   if (current.status && current.status !== "pending") return;
-  const agencyName = current.agencyName || user.email?.split("@")[1]?.split(".")[0] || "Minha Agência";
-  await fb.set(requestRef, {
+  const inviteCode = current.inviteCode || new URLSearchParams(window.location.search).get("invite") || "";
+  const inviteTenant = await findTenantByInviteCode(inviteCode, new URLSearchParams(window.location.search).get("workspace") || current.tenantId || "");
+  const tenant = inviteTenant;
+  const tenantId = tenant?.tenantId || "";
+  const agencyName = current.agencyName || tenant?.name || user.email?.split("@")[1]?.split(".")[0] || "Minha Agência";
+  if (!tenantId) return;
+  const payload = {
     ...current,
     uid: user.uid,
+    ...(tenantId ? { tenantId } : {}),
     agencyName,
     userName: user.displayName || user.email?.split("@")[0] || "Usuário",
     email: user.email || "",
+    inviteCode: tenant?.inviteCode || current.inviteCode || "",
     status: "pending",
     source: "app",
     requestedAt: current.requestedAt || now,
     updatedAt: now
-  });
+  };
+  const updates = {
+    [`accessRequests/${user.uid}`]: payload
+  };
+  if (tenantId) updates[`tenantAccessRequests/${tenantId}/${user.uid}`] = payload;
+  await fb.update(fb.ref(fb.db), updates);
+}
+
+async function findTenantByInviteCode(inviteCode = "", workspaceId = "") {
+  const fb = state.firebase;
+  const code = normalizeInviteCode(inviteCode);
+  const workspace = normalizeWorkspaceId(workspaceId) || inviteWorkspaceFromValue(inviteCode);
+  if (!fb?.db || !code) return null;
+  try {
+    const snap = await fb.get(fb.ref(fb.db, `tenantInvites/${code}`));
+    const invite = snap.val() || {};
+    if (!snap.exists() || invite.status !== "active" || !invite.tenantId) return null;
+    if (workspace && invite.tenantId !== workspace) return null;
+    return { ...invite, inviteCode: code };
+  } catch (error) {
+    return null;
+  }
+}
+
+function normalizeWorkspaceId(value = "") {
+  const id = String(value || "").trim();
+  return /^tenant_[A-Za-z0-9_-]+$/.test(id) ? id : "";
+}
+
+function inviteWorkspaceFromValue(value = "") {
+  const raw = String(value || "").trim();
+  try {
+    if (/^https?:\/\//i.test(raw)) return normalizeWorkspaceId(new URL(raw).searchParams.get("workspace") || "");
+  } catch (error) {}
+  const queryMatch = raw.match(/[?&]workspace=([^&#]+)/i);
+  return queryMatch ? normalizeWorkspaceId(decodeURIComponent(queryMatch[1] || "")) : "";
+}
+
+async function ensureWorkspaceInviteCode() {
+  if (!canManageWorkspace() || !state.data?.meta) return "";
+  const existing = normalizeInviteCode(state.data.meta.inviteCode || "");
+  const code = existing || await generateUniqueInviteCode(state.data.meta.name || "KRIO");
+  const now = Date.now();
+  state.data.meta.inviteCode = code;
+  state.tenantMeta = state.data.meta;
+
+  if (!state.firebase?.db || state.demoMode || state.tenantId === "local") return code;
+
+  const invitePayload = workspaceInvitePayload(code, now);
+  const updates = {
+    [`tenantInvites/${code}`]: invitePayload
+  };
+  if (!existing) {
+    updates[`tenants/${state.tenantId}/meta/inviteCode`] = code;
+    updates[`tenants/${state.tenantId}/meta/inviteUpdatedAt`] = now;
+  }
+
+  try {
+    await state.firebase.update(state.firebase.ref(state.firebase.db), updates);
+  } catch (error) {
+    // The invite link also carries the workspace id, so this index is optional.
+  }
+  return code;
+}
+
+function workspaceInvitePayload(code, now = Date.now()) {
+  const meta = state.data?.meta || state.tenantMeta || {};
+  return {
+    code,
+    tenantId: state.tenantId,
+    name: meta.name || "Workspace Krio",
+    slug: meta.slug || slugify(meta.name || "workspace"),
+    ownerUid: meta.ownerUid || state.user?.uid || "",
+    status: "active",
+    updatedAt: now,
+    createdAt: meta.inviteUpdatedAt || meta.createdAt || now
+  };
+}
+
+function normalizeInviteCode(value = "") {
+  let raw = String(value || "").trim();
+  if (!raw) return "";
+  try {
+    if (/^https?:\/\//i.test(raw)) raw = new URL(raw).searchParams.get("invite") || raw;
+  } catch (error) {}
+  const queryMatch = raw.match(/[?&]invite=([^&#]+)/i);
+  if (queryMatch) raw = decodeURIComponent(queryMatch[1] || "");
+  return raw.toUpperCase().replace(/[^A-Z0-9-]/g, "").replace(/-+/g, "-").replace(/(^-|-$)/g, "");
+}
+
+function generateInviteCode(seed = "KRIO") {
+  const prefix = slugify(seed).replace(/-/g, "").slice(0, 4).toUpperCase() || "KRIO";
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let suffix = "";
+  const values = new Uint32Array(5);
+  if (crypto?.getRandomValues) crypto.getRandomValues(values);
+  for (let index = 0; index < 5; index += 1) {
+    const value = values[index] || Math.floor(Math.random() * alphabet.length);
+    suffix += alphabet[value % alphabet.length];
+  }
+  return `${prefix}-${suffix}`;
+}
+
+async function generateUniqueInviteCode(seed = "KRIO") {
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    const code = generateInviteCode(seed);
+    if (!state.firebase?.db || state.demoMode || state.tenantId === "local") return code;
+    const snap = await state.firebase.get(state.firebase.ref(state.firebase.db, `tenantInvites/${code}`));
+    if (!snap.exists()) return code;
+  }
+  return `${slugify(seed).replace(/-/g, "").slice(0, 4).toUpperCase() || "KRIO"}-${Date.now().toString(36).toUpperCase()}`;
+}
+
+function workspaceInviteLink() {
+  const code = normalizeInviteCode(state.data?.meta?.inviteCode || "");
+  return code ? `${window.location.origin}/?invite=${encodeURIComponent(code)}&workspace=${encodeURIComponent(state.tenantId)}` : "";
 }
 
 function finishBoot() {
@@ -836,7 +961,7 @@ function ensureDialogHosts() {
 
 function handleClick(event) {
   if (event.target.closest("input, textarea, select, label")) return;
-  const button = event.target.closest("button, [data-action], [data-tracker-view], [data-approval-client], [data-demand-id], [data-creative-id], [data-dialog-backdrop]");
+  const button = event.target.closest("button, [data-action], [data-tracker-view], [data-approval-client], [data-client-folder], [data-demand-id], [data-creative-id], [data-dialog-backdrop]");
   if (!button) return;
 
   if (button.matches("[data-dialog-backdrop]") && button === event.target) {
@@ -860,6 +985,13 @@ function handleClick(event) {
     state.approvalClientId = button.dataset.approvalClient;
     state.approvalStatus = "prov";
     render();
+    return;
+  }
+
+  if (button.dataset.clientFolder) {
+    const id = button.dataset.clientFolder;
+    state.approvalOpenClientFolders[id] = !isClientFolderOpen(id);
+    renderModuleActions();
     return;
   }
 
@@ -924,6 +1056,7 @@ function handleClick(event) {
     deletePerson: () => deletePerson(button.dataset.id),
     approveAccessRequest: () => approveAccessRequest(button.dataset.uid),
     rejectAccessRequest: () => rejectAccessRequest(button.dataset.uid),
+    copyInviteLink: () => copyWorkspaceInvite(workspaceInviteLink(), "Link de convite copiado"),
     togglePersonDemandType: () => togglePersonDemandType(button.dataset.person, button.dataset.type, button),
     setColorValue: () => setColorValue(button),
     agendaPrev: () => moveAgenda(-1),
@@ -953,6 +1086,9 @@ function handleClick(event) {
     },
     openClientDialog: () => openClientDialog(button.dataset.id),
     deleteClient: () => deleteClient(button.dataset.id),
+    openClientFolderDialog: () => openClientFolderDialog(button.dataset.id),
+    deleteClientFolder: () => deleteClientFolder(button.dataset.id),
+    removeClientFromFolder: () => removeClientFromFolder(button.dataset.folder, button.dataset.client),
     openGroupDialog: () => openGroupDialog(button.dataset.id),
     deleteGroup: () => deleteGroup(button.dataset.id),
     openCreativeDialog: () => openCreativeDialog(button.dataset.id || "", { groupId: button.dataset.group }),
@@ -988,6 +1124,7 @@ function canRunAction(action, button) {
     "deletePerson",
     "approveAccessRequest",
     "rejectAccessRequest",
+    "copyInviteLink",
     "togglePersonDemandType",
     "openPlanDialog",
     "exportTracker",
@@ -996,7 +1133,9 @@ function canRunAction(action, button) {
     "openClientManagement",
     "openBriefingDialog",
     "deleteClient",
-    "openGroupDialog",
+    "openClientFolderDialog",
+    "deleteClientFolder",
+    "removeClientFromFolder",
     "deleteGroup"
   ]);
   if (workspaceActions.has(action)) return canManageWorkspace();
@@ -1024,6 +1163,10 @@ function handleSubmit(event) {
     event.preventDefault();
     savePersonForm(form);
   }
+  if (form.id === "workspaceForm") {
+    event.preventDefault();
+    saveWorkspaceForm(form);
+  }
   if (form.id === "agendaEventForm") {
     event.preventDefault();
     saveAgendaEventForm(form);
@@ -1031,6 +1174,10 @@ function handleSubmit(event) {
   if (form.id === "clientForm") {
     event.preventDefault();
     saveClientForm(form);
+  }
+  if (form.id === "clientFolderForm") {
+    event.preventDefault();
+    saveClientFolderForm(form);
   }
   if (form.id === "groupForm") {
     event.preventDefault();
@@ -1071,6 +1218,19 @@ function handleSubmit(event) {
 }
 
 function handleApprovalDragStart(event) {
+  const clientItem = event.target.closest(".approval-client-nav[draggable='true']");
+  if (clientItem && !event.target.closest("[data-action]")) {
+    const payload = {
+      type: "client",
+      clientId: clientItem.dataset.clientDragId
+    };
+    state.approvalDrag = payload;
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("application/json", JSON.stringify(payload));
+    requestAnimationFrame(() => clientItem.classList.add("dragging"));
+    return;
+  }
+
   if (event.target.closest("button, input, textarea, select, label")) return;
 
   const demandItem = event.target.closest(".tracker-demand-item[draggable='true']");
@@ -1088,23 +1248,27 @@ function handleApprovalDragStart(event) {
 
   const card = event.target.closest(".approval-creative[draggable='true']");
   if (card) {
-    event.dataTransfer.effectAllowed = "move";
-    event.dataTransfer.setData("application/json", JSON.stringify({
+    const payload = {
       type: "creative",
       creativeId: card.dataset.id,
       fromGroupId: card.dataset.group
-    }));
+    };
+    state.approvalDrag = payload;
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("application/json", JSON.stringify(payload));
     requestAnimationFrame(() => card.classList.add("dragging"));
     return;
   }
 
   const group = event.target.closest(".approval-kanban-column[draggable='true']");
   if (!group || event.target.closest(".approval-creative")) return;
-  event.dataTransfer.effectAllowed = "move";
-  event.dataTransfer.setData("application/json", JSON.stringify({
+  const payload = {
     type: "group",
     groupId: group.dataset.approvalGroup
-  }));
+  };
+  state.approvalDrag = payload;
+  event.dataTransfer.effectAllowed = "move";
+  event.dataTransfer.setData("application/json", JSON.stringify(payload));
   requestAnimationFrame(() => group.classList.add("dragging"));
 }
 
@@ -1130,6 +1294,19 @@ function handleApprovalDragOver(event) {
   }
 
   const payload = readApprovalDragPayload(event);
+  if (payload.type === "client") {
+    const folderDropzone = event.target.closest("[data-client-folder-dropzone]");
+    const clientTarget = event.target.closest("[data-client-drop-target]");
+    if (!folderDropzone && !clientTarget) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    folderDropzone?.classList.add("drag-over");
+    if (clientTarget && clientTarget.dataset.clientDropTarget !== payload.clientId) {
+      clientTarget.classList.add("client-drag-over");
+    }
+    return;
+  }
+
   if (payload.type === "group") {
     const board = event.target.closest("[data-approval-group-board]");
     if (!board) return;
@@ -1163,6 +1340,16 @@ function handleApprovalDragLeave(event) {
     groupColumn.classList.remove("group-drag-over");
   }
 
+  const clientFolder = event.target.closest("[data-client-folder-dropzone]");
+  if (clientFolder && !clientFolder.contains(event.relatedTarget)) {
+    clientFolder.classList.remove("drag-over");
+  }
+
+  const clientTarget = event.target.closest("[data-client-drop-target]");
+  if (clientTarget && !clientTarget.contains(event.relatedTarget)) {
+    clientTarget.classList.remove("client-drag-over");
+  }
+
   const dropzone = event.target.closest("[data-approval-dropzone]");
   if (!dropzone || dropzone.contains(event.relatedTarget)) return;
   dropzone.classList.remove("drag-over");
@@ -1173,9 +1360,10 @@ function handleApprovalDragEnd() {
     node.classList.remove("dragging", "drag-over");
   });
   state.trackerDrag = null;
+  state.approvalDrag = null;
 
-  document.querySelectorAll(".approval-creative.dragging, .approval-kanban-column.dragging, .approval-kanban-column.group-drag-over, .approval-kanban-list.drag-over, .approval-upload-zone.drag-over").forEach((node) => {
-    node.classList.remove("dragging", "drag-over", "group-drag-over");
+  document.querySelectorAll(".approval-creative.dragging, .approval-kanban-column.dragging, .approval-kanban-column.group-drag-over, .approval-kanban-list.drag-over, .approval-upload-zone.drag-over, .approval-client-nav.dragging, [data-client-folder-dropzone].drag-over, [data-client-drop-target].client-drag-over").forEach((node) => {
+    node.classList.remove("dragging", "drag-over", "group-drag-over", "client-drag-over");
   });
 }
 
@@ -1204,6 +1392,23 @@ function handleApprovalDrop(event) {
   }
 
   const payload = readApprovalDragPayload(event);
+  if (payload.type === "client") {
+    const folderDropzone = event.target.closest("[data-client-folder-dropzone]");
+    const clientTarget = event.target.closest("[data-client-drop-target]");
+    if (!folderDropzone && !clientTarget) {
+      handleApprovalDragEnd();
+      return;
+    }
+    event.preventDefault();
+    if (folderDropzone) {
+      moveClientToFolder(payload.clientId, folderDropzone.dataset.clientFolderDropzone);
+    } else if (clientTarget) {
+      createClientFolderFromClients(payload.clientId, clientTarget.dataset.clientDropTarget);
+    }
+    handleApprovalDragEnd();
+    return;
+  }
+
   if (payload.type === "group") {
     const board = event.target.closest("[data-approval-group-board]");
     if (!board) return;
@@ -1231,9 +1436,10 @@ function handleApprovalDrop(event) {
 
 function readApprovalDragPayload(event) {
   try {
-    return JSON.parse(event.dataTransfer?.getData("application/json") || "{}");
+    const raw = event.dataTransfer?.getData("application/json") || "";
+    return raw ? JSON.parse(raw) : state.approvalDrag || {};
   } catch (error) {
-    return {};
+    return state.approvalDrag || {};
   }
 }
 
@@ -1435,7 +1641,7 @@ function applyRoleVisibility() {
   document.querySelectorAll("[data-tracker-view]").forEach((button) => {
     button.hidden = !canAccessTrackerView(button.dataset.trackerView);
   });
-  document.querySelectorAll('[data-action="openPersonDialog"], [data-action="deletePerson"], [data-action="togglePersonDemandType"], [data-action="deleteWeek"], [data-action="openPlanDialog"], [data-action="exportTracker"], [data-action="printTracker"], [data-action="openClientDialog"], [data-action="deleteClient"], [data-action="openGroupDialog"], [data-action="deleteGroup"]').forEach((button) => {
+  document.querySelectorAll('[data-action="openPersonDialog"], [data-action="deletePerson"], [data-action="togglePersonDemandType"], [data-action="deleteWeek"], [data-action="openPlanDialog"], [data-action="exportTracker"], [data-action="printTracker"], [data-action="openClientDialog"], [data-action="deleteClient"], [data-action="openClientFolderDialog"], [data-action="deleteClientFolder"], [data-action="removeClientFromFolder"], [data-action="deleteGroup"]').forEach((button) => {
     button.hidden = !canManageWorkspace();
   });
   document.querySelectorAll(".side-section-title").forEach((title) => {
@@ -1446,9 +1652,12 @@ function applyRoleVisibility() {
 function renderUser() {
   const name = state.user?.displayName || state.user?.email?.split("@")[0] || "Usuário";
   const role = `${state.tenantMeta?.name || "Workspace Krio"} · ${accessRoleLabel(currentAccessRole())}`;
+  const userBlock = $("#userBlock");
   const avatar = $("#userAvatar");
   const userName = $("#userName");
   const userRole = $("#userRole");
+  const userSettingsIcon = $("#userSettingsIcon");
+  const canEditProfile = canManageWorkspace();
 
   if (avatar) {
     avatar.hidden = false;
@@ -1463,6 +1672,22 @@ function renderUser() {
   if (userRole) {
     userRole.hidden = false;
     userRole.textContent = role;
+  }
+  if (userBlock) {
+    userBlock.disabled = !canEditProfile;
+    userBlock.title = canEditProfile ? "Editar meu perfil" : "Perfil";
+    userBlock.setAttribute("aria-label", canEditProfile ? "Editar meu perfil" : "Perfil do usuário");
+    if (canEditProfile) {
+      userBlock.dataset.action = "openPersonDialog";
+      userBlock.dataset.id = currentPersonId();
+    } else {
+      delete userBlock.dataset.action;
+      delete userBlock.dataset.id;
+    }
+  }
+  if (userSettingsIcon) {
+    userSettingsIcon.hidden = !canEditProfile;
+    userSettingsIcon.innerHTML = icons.settings;
   }
 }
 
@@ -1516,18 +1741,9 @@ function renderModuleActions() {
       canAccessTrackerView("clients") ? sideButton("clients", "Clientes", icons.team, state.trackerView === "clients") : "",
       canAccessTrackerView("reports") ? sideButton("reports", "Relatórios", icons.report, state.trackerView === "reports") : "",
       canAccessTrackerView("history") ? sideButton("history", "Histórico", icons.history, state.trackerView === "history") : "",
-      canAccessTrackerView("team") ? sideButton("team", "Equipe", icons.team, state.trackerView === "team") : "",
+      canAccessTrackerView("team") ? sideButton("team", `Equipe${state.accessRequests.length ? `<span class="tracker-head-badge">${state.accessRequests.length}</span>` : ""}`, icons.team, state.trackerView === "team") : "",
       canAccessTrackerView("trash") ? sideButton("trash", `Lixeira${trashCount ? `<span class="tracker-head-badge">${trashCount}</span>` : ""}`, icons.trash, state.trackerView === "trash") : ""
     ].join("");
-    const profileAction = canManageWorkspace()
-      ? `
-        <div class="side-section-title">Perfil</div>
-        <button class="tracker-profile-chip" type="button" data-action="openPersonDialog" data-id="${attr(currentPersonId())}">
-          <span class="tracker-profile-chip-avatar">${initials(state.user?.displayName || "Krio")}</span>
-          <span class="side-label">${esc(state.user?.displayName || "Meu perfil")}</span>
-          <span class="tracker-profile-chip-settings">${icons.settings}</span>
-        </button>`
-      : "";
     mount.innerHTML = `
       <nav class="side-nav tracker-side-group" aria-label="Tracker">
         <div class="side-section-title">Tracker</div>
@@ -1535,7 +1751,6 @@ function renderModuleActions() {
         ${isCreatorAccessRole() || canManageWorkspace() ? `<button class="tracker-head-btn primary" type="button" data-action="openAddDemand">
           <span class="side-icon">${icons.plus}</span><span class="side-label">Nova demanda</span>
         </button>` : ""}
-        ${profileAction}
       </nav>`;
     return;
   }
@@ -1552,18 +1767,55 @@ function renderModuleActions() {
   }
 
   const clients = getClients();
+  const folders = getClientFolders();
+  const ungroupedClients = getUngroupedClients();
   mount.innerHTML = `
-    <nav class="side-nav" aria-label="Aprovação">
+    <nav class="side-nav approval-client-side-nav" aria-label="Clientes">
       <div class="side-section-title">Clientes</div>
-      ${clients.map((client) => `
-        <button class="nav-btn ${state.approvalClientId === client.id ? "active" : ""}" type="button" data-approval-client="${attr(client.id)}">
-          <span class="side-icon">${clientAvatar(client, "small")}</span>
-          <span class="side-label">${esc(client.name)}</span>
-        </button>`).join("")}
+      ${folders.map(renderClientFolderNav).join("")}
+      ${ungroupedClients.length && folders.length ? `<div class="side-section-title compact">Soltos</div>` : ""}
+      ${ungroupedClients.map(renderClientNavButton).join("")}
+      ${!clients.length ? `<div class="approval-side-empty">Nenhum cliente cadastrado.</div>` : ""}
       <button class="nav-btn" type="button" data-action="openClientDialog">
         <span class="side-icon">${icons.plus}</span><span class="side-label">Novo cliente</span>
       </button>
     </nav>`;
+}
+
+function renderClientFolderNav(folder) {
+  const clients = folder.clientIds.map((id) => getClient(id)).filter(Boolean);
+  const isOpen = isClientFolderOpen(folder.id) || clients.some((client) => client.id === state.approvalClientId);
+  const active = clients.some((client) => client.id === state.approvalClientId);
+  return `
+    <div class="approval-client-folder ${isOpen ? "open" : ""} ${active ? "active" : ""}" data-client-folder-dropzone="${attr(folder.id)}">
+      <button class="nav-btn approval-folder-toggle ${active ? "active" : ""}" type="button" data-client-folder="${attr(folder.id)}" aria-expanded="${isOpen ? "true" : "false"}">
+        <span class="side-icon approval-folder-stack">${folderIconMarkup(clients)}</span>
+        <span class="side-label">${esc(folder.name)}</span>
+        <span class="nav-count">${clients.length}</span>
+      </button>
+      <div class="approval-folder-actions">
+        <button class="krio-icon-btn small" type="button" title="Editar grupo" aria-label="Editar grupo" data-action="openClientFolderDialog" data-id="${attr(folder.id)}">${icons.edit}</button>
+        <button class="krio-icon-btn small danger" type="button" title="Excluir grupo" aria-label="Excluir grupo" data-action="deleteClientFolder" data-id="${attr(folder.id)}">${icons.trash}</button>
+      </div>
+      <div class="approval-folder-children" ${isOpen ? "" : "hidden"}>
+        ${clients.map((client) => renderClientNavButton(client, folder.id)).join("") || `<div class="approval-side-empty small">Arraste clientes para este grupo.</div>`}
+      </div>
+    </div>`;
+}
+
+function renderClientNavButton(client, folderId = "") {
+  return `
+    <button class="nav-btn approval-client-nav ${folderId ? "nested" : ""} ${state.approvalClientId === client.id ? "active" : ""}" type="button" draggable="${canManageWorkspace() ? "true" : "false"}" data-approval-client="${attr(client.id)}" data-client-drag-id="${attr(client.id)}" data-client-drop-target="${attr(client.id)}">
+      <span class="side-icon">${clientAvatar(client, "small")}</span>
+      <span class="side-label">${esc(client.name)}</span>
+      ${folderId ? `<span class="approval-client-unfolder" title="Remover do grupo" aria-label="Remover do grupo" data-action="removeClientFromFolder" data-folder="${attr(folderId)}" data-client="${attr(client.id)}">${icons.close}</span>` : ""}
+    </button>`;
+}
+
+function folderIconMarkup(clients) {
+  const shown = clients.slice(0, 3);
+  if (!shown.length) return icons.team;
+  return `<span class="approval-folder-mini-stack">${shown.map((client) => clientAvatar(client, "tiny")).join("")}</span>`;
 }
 
 function sideButton(view, label, iconMarkup, active) {
@@ -2309,23 +2561,74 @@ function renderHistory() {
 
 function renderTeam() {
   if (!canManageWorkspace()) return `<section class="krio-tracker"><div class="tracker-empty">Acesso restrito ao administrador.</div></section>`;
+  const pendingRequests = state.accessRequests;
+  const workspaceName = state.data?.meta?.name || state.tenantMeta?.name || "Workspace Krio";
+  const workspacePanel = `
+    <form id="workspaceForm" class="team-workspace-card">
+      <div class="team-workspace-copy">
+        <span>Workspace</span>
+        <strong>Nome exibido no app</strong>
+        <small>Este nome aparece na sidebar, no perfil e nos convites enviados para a equipe.</small>
+      </div>
+      <div class="team-workspace-actions">
+        <input class="team-workspace-input" name="workspaceName" value="${attr(workspaceName)}" maxlength="80" required aria-label="Nome do workspace">
+        <button class="krio-btn small primary" type="submit">Salvar</button>
+      </div>
+    </form>`;
+  const inviteCode = normalizeInviteCode(state.data?.meta?.inviteCode || "");
+  const inviteLink = workspaceInviteLink();
+  const invitePanel = inviteCode ? `
+    <div class="team-invite-card">
+      <div class="team-invite-copy">
+        <span>Convite do workspace</span>
+        <strong>${esc(workspaceName)}</strong>
+        <small>Envie este link para qualquer colaborador, mesmo com Gmail pessoal.</small>
+      </div>
+      <div class="team-invite-actions">
+        <input class="team-invite-input" value="${attr(inviteLink)}" readonly aria-label="Link de convite">
+        <button class="krio-btn small primary" type="button" data-action="copyInviteLink">Copiar link</button>
+      </div>
+    </div>` : `
+    <div class="team-invite-card">
+      <div class="team-invite-copy">
+        <span>Convite do workspace</span>
+        <strong>Gerando convite...</strong>
+        <small>Atualize a tela em instantes caso o codigo ainda nao apareca.</small>
+      </div>
+    </div>`;
+  const accessQueue = pendingRequests.length ? `
+    <div class="tracker-list team-assignment-list team-access-list">
+      ${pendingRequests.map((request) => `
+        <div class="tracker-profile-item team-assignment-card team-access-request">
+          <div class="tracker-profile-left">
+            <span class="tracker-profile-dot" style="background:#FBBF24"></span>
+            <div><strong>${esc(request.userName || request.email || "Solicitação")}</strong><span>${esc(request.email || "")} · ${esc(roleRequestLabel(request.role || "member"))}</span></div>
+          </div>
+          <div class="tracker-toolbar">
+            <button class="krio-btn small primary" type="button" data-action="approveAccessRequest" data-uid="${attr(request.uid)}">Aprovar</button>
+            <button class="krio-btn small danger" type="button" data-action="rejectAccessRequest" data-uid="${attr(request.uid)}">Recusar</button>
+          </div>
+        </div>`).join("")}
+    </div>` : `
+    <div class="team-access-empty">
+      <strong>Nenhuma solicitação pendente</strong>
+      <span>Quando um colaborador usar o link de convite do workspace, o pedido aparece aqui.</span>
+    </div>`;
   return `
     <section class="krio-tracker">
       ${trackerSectionHead("Equipe", "Perfis, acesso e tarefas atribuídas para cada colaborador.", `<button class="krio-btn primary" type="button" data-action="openPersonDialog">${icons.plus} Pessoa</button>`)}
-      ${state.accessRequests.length ? `
-        <div class="tracker-list team-assignment-list">
-          ${state.accessRequests.map((request) => `
-            <div class="tracker-profile-item team-assignment-card">
-              <div class="tracker-profile-left">
-                <span class="tracker-profile-dot" style="background:#FBBF24"></span>
-                <div><strong>${esc(request.userName || request.email || "Solicitação")}</strong><span>${esc(request.email || "")} · ${esc(roleRequestLabel(request.role || "member"))}</span></div>
-              </div>
-              <div class="tracker-toolbar">
-                <button class="krio-btn small primary" type="button" data-action="approveAccessRequest" data-uid="${attr(request.uid)}">Aprovar</button>
-                <button class="krio-btn small danger" type="button" data-action="rejectAccessRequest" data-uid="${attr(request.uid)}">Recusar</button>
-              </div>
-            </div>`).join("")}
-        </div>` : ""}
+      <div class="team-access-panel">
+        <div class="team-access-head">
+          <div>
+            <strong>Solicitações de acesso</strong>
+            <span>Fila de colaboradores aguardando liberação.</span>
+          </div>
+          <span class="team-access-count">${pendingRequests.length}</span>
+        </div>
+        ${workspacePanel}
+        ${invitePanel}
+        ${accessQueue}
+      </div>
       <div class="tracker-list team-assignment-list">
         ${getProfiles().map((person) => `
           <div class="tracker-profile-item team-assignment-card">
@@ -2541,7 +2844,7 @@ function renderApproval() {
       <section class="krio-approval">
         <header class="approval-hero">
           <div>
-            <div class="approval-eyebrow">Aprovação criativa</div>
+            <div class="approval-eyebrow">Clientes</div>
             <h2>Clientes e peças</h2>
             <p>${clients.length} cliente(s), ${totalCreatives} peça(s) em acompanhamento.</p>
           </div>
@@ -2730,7 +3033,7 @@ function approvalSectionCopy(status) {
       title: "Postados",
       text: "Histórico de criativos já publicados."
     }
-  }[status] || { title: "Aprovação", text: "Acompanhe o fluxo das peças." };
+  }[status] || { title: "Clientes", text: "Acompanhe o fluxo das peças." };
 }
 
 function renderApprovalStatusView(status, client, groups, creatives) {
@@ -2918,6 +3221,9 @@ function openDemandDialog(id = "", defaults = {}) {
     return;
   }
   const selectedType = existing?.type || (availableDemandTypes.some((type) => type.id === defaults.type) ? defaults.type : availableDemandTypes[0]?.id) || "mensal";
+  const clientOptions = getClients()
+    .map((client) => `<option value="${attr(client.name)}" label="${attr(client.email || client.name)}"></option>`)
+    .join("");
 
   $("#trackerDialogHost").innerHTML = `
     <div class="tracker-dialog-backdrop" data-dialog-backdrop>
@@ -2940,7 +3246,8 @@ function openDemandDialog(id = "", defaults = {}) {
           </div>
           <div class="form-row">
             <label class="tracker-field">Cliente
-              <input class="krio-input" name="client" value="${attr(existing?.client || "")}" placeholder="Cliente">
+              <input class="krio-input" name="client" list="demandClientOptions" value="${attr(existing?.client || "")}" placeholder="Digite ou selecione um cliente">
+              <datalist id="demandClientOptions">${clientOptions}</datalist>
             </label>
             <label class="tracker-field">Prazo
               <input class="krio-input" name="dueDate" type="date" value="${attr(existing?.dueDate || "")}">
@@ -3209,6 +3516,51 @@ function savePersonForm(form) {
   saveAndRender();
 }
 
+async function saveWorkspaceForm(form) {
+  if (!canManageWorkspace()) return;
+  const formData = new FormData(form);
+  const name = String(formData.get("workspaceName") || "").trim();
+  if (!name) return;
+  const slug = slugify(name);
+  const now = Date.now();
+  state.data.meta = {
+    ...(state.data.meta || {}),
+    name,
+    slug,
+    updatedAt: now
+  };
+  state.tenantMeta = state.data.meta;
+  state.data.updatedAt = now;
+  saveLocalState();
+  render();
+
+  if (!state.firebase?.db || state.demoMode || state.tenantId === "local") {
+    setSyncState("online", "Nome do workspace salvo localmente");
+    return;
+  }
+
+  markLocalWrite();
+  try {
+    const updates = {
+      [`tenants/${state.tenantId}/meta/name`]: name,
+      [`tenants/${state.tenantId}/meta/slug`]: slug,
+      [`tenants/${state.tenantId}/updatedAt`]: now
+    };
+    const inviteCode = normalizeInviteCode(state.data.meta.inviteCode || "");
+    if (inviteCode) {
+      updates[`tenantInvites/${inviteCode}/name`] = name;
+      updates[`tenantInvites/${inviteCode}/slug`] = slug;
+      updates[`tenantInvites/${inviteCode}/updatedAt`] = now;
+    }
+    await state.firebase.update(state.firebase.ref(state.firebase.db), updates);
+    releaseLocalWrite(true);
+    setSyncState("online", "Nome do workspace atualizado");
+  } catch (error) {
+    releaseLocalWrite(false);
+    setSyncState("offline", "Nao foi possivel salvar o nome do workspace.");
+  }
+}
+
 function deletePerson(id) {
   const profiles = getProfiles();
   if (profiles.length <= 1) return;
@@ -3311,6 +3663,10 @@ async function saveClientForm(form) {
 
 function deleteClient(id) {
   delete state.data.approval.clients[id];
+  getClientFolders().forEach((folder) => {
+    const stored = getClientFolder(folder.id);
+    if (stored) stored.clientIds = uniqueClientIds(stored.clientIds).filter((clientId) => clientId !== id);
+  });
   if (state.approvalClientId === id) state.approvalClientId = null;
   removeClientPortalIndex(id);
   closeDialogs();
@@ -3325,10 +3681,138 @@ async function removeClientPortalIndex(id) {
     setSyncState("offline", "Não foi possível remover o link do portal.");
   }
 }
+function openClientFolderDialog(id = "") {
+  const folder = id ? getClientFolder(id) : null;
+  const selected = new Set(uniqueClientIds(folder?.clientIds || []));
+  const clients = getClients();
+  $("#approvalDialogHost").innerHTML = `
+    <div class="approval-dialog-backdrop" data-dialog-backdrop>
+      <div class="approval-dialog" role="dialog" aria-modal="true" aria-labelledby="clientFolderDialogTitle">
+        <div class="approval-dialog-head">
+          <div><strong id="clientFolderDialogTitle">${folder ? "Editar grupo de clientes" : "Novo grupo de clientes"}</strong><span>Organize franquias, unidades ou marcas do mesmo cliente.</span></div>
+          <button class="krio-icon-btn" type="button" data-action="closeDialog" aria-label="Fechar">${icons.close}</button>
+        </div>
+        <form id="clientFolderForm" class="approval-form" data-id="${attr(id)}">
+          <label class="approval-field">Nome do grupo
+            <input class="krio-input" name="name" required value="${attr(folder?.name || "")}" placeholder="Ex: Rede Norte, Franquias SP...">
+          </label>
+          <div class="approval-field">
+            Clientes dentro do grupo
+            <div class="approval-folder-client-list">
+              ${clients.length ? clients.map((client) => `
+                <label class="approval-folder-client-option">
+                  <input type="checkbox" name="clientIds" value="${attr(client.id)}" ${selected.has(client.id) ? "checked" : ""}>
+                  ${clientAvatar(client, "small")}
+                  <span>${esc(client.name)}</span>
+                </label>`).join("") : `<div class="approval-empty small">Cadastre clientes antes de criar grupos.</div>`}
+            </div>
+          </div>
+          <div class="approval-dialog-actions">
+            ${folder ? `<button class="krio-btn danger" type="button" data-action="deleteClientFolder" data-id="${attr(id)}">Excluir</button>` : ""}
+            <button class="krio-btn" type="button" data-action="closeDialog">Cancelar</button>
+            <button class="krio-btn primary" type="submit">Salvar</button>
+          </div>
+        </form>
+      </div>
+    </div>`;
+}
+
+function saveClientFolderForm(form) {
+  const formData = new FormData(form);
+  const name = String(formData.get("name") || "").trim();
+  if (!name) return;
+  const id = form.dataset.id || newId("client_folder");
+  const clientIds = uniqueClientIds(formData.getAll("clientIds"));
+  state.data.approval.clientFolders ||= {};
+  removeClientIdsFromOtherFolders(clientIds, id);
+  state.data.approval.clientFolders[id] = {
+    ...(state.data.approval.clientFolders[id] || {}),
+    id,
+    name,
+    clientIds,
+    createdAt: state.data.approval.clientFolders[id]?.createdAt || Date.now(),
+    updatedAt: Date.now()
+  };
+  state.approvalOpenClientFolders[id] = true;
+  closeDialogs();
+  saveAndRender();
+}
+
+function deleteClientFolder(id) {
+  if (!state.data.approval.clientFolders?.[id]) return;
+  delete state.data.approval.clientFolders[id];
+  delete state.approvalOpenClientFolders[id];
+  closeDialogs();
+  saveAndRender();
+}
+
+function removeClientFromFolder(folderId, clientId) {
+  const folder = getClientFolder(folderId);
+  if (!folder || !clientId) return;
+  folder.clientIds = uniqueClientIds(folder.clientIds).filter((id) => id !== clientId);
+  folder.updatedAt = Date.now();
+  saveAndRender();
+}
+
+function removeClientIdsFromOtherFolders(clientIds, exceptFolderId = "") {
+  const ids = new Set(clientIds);
+  getClientFolders().forEach((folder) => {
+    if (folder.id === exceptFolderId) return;
+    const stored = getClientFolder(folder.id);
+    if (!stored) return;
+    stored.clientIds = uniqueClientIds(stored.clientIds).filter((id) => !ids.has(id));
+    stored.updatedAt = Date.now();
+  });
+}
+
+function findClientFolderByClientId(clientId) {
+  return getClientFolders().find((folder) => folder.clientIds.includes(clientId)) || null;
+}
+
+function moveClientToFolder(clientId, folderId) {
+  const client = getClient(clientId);
+  const folder = getClientFolder(folderId);
+  if (!client || !folder) return;
+  const nextIds = uniqueClientIds([...(folder.clientIds || []), clientId]);
+  removeClientIdsFromOtherFolders([clientId], folderId);
+  folder.clientIds = nextIds;
+  folder.updatedAt = Date.now();
+  state.approvalOpenClientFolders[folderId] = true;
+  saveAndRender();
+}
+
+function createClientFolderFromClients(sourceClientId, targetClientId) {
+  if (!sourceClientId || !targetClientId || sourceClientId === targetClientId) return;
+  const source = getClient(sourceClientId);
+  const target = getClient(targetClientId);
+  if (!source || !target) return;
+
+  const targetFolder = findClientFolderByClientId(targetClientId);
+  if (targetFolder) {
+    moveClientToFolder(sourceClientId, targetFolder.id);
+    return;
+  }
+
+  const id = newId("client_folder");
+  const name = `Grupo ${target.name}`;
+  const clientIds = uniqueClientIds([targetClientId, sourceClientId]);
+  state.data.approval.clientFolders ||= {};
+  removeClientIdsFromOtherFolders(clientIds);
+  state.data.approval.clientFolders[id] = {
+    id,
+    name,
+    clientIds,
+    createdAt: Date.now(),
+    updatedAt: Date.now()
+  };
+  state.approvalOpenClientFolders[id] = true;
+  saveAndRender();
+}
 
 function openGroupDialog(id = "") {
   const client = getClient(state.approvalClientId);
   if (!client) {
+    if (!canManageWorkspace()) return;
     openClientDialog();
     return;
   }
@@ -3885,7 +4369,7 @@ function openPlanDialog(message = "") {
           <article class="tracker-report-card">
             <div>
               <strong>Acesso integral</strong>
-              <span>Tracker, Operação, Aprovação, relatórios e uso contínuo dentro do ambiente liberado para o cliente.</span>
+              <span>Tracker, Operação, Clientes, relatórios e uso contínuo dentro do ambiente liberado para o cliente.</span>
               <div class="tracker-demand-meta" style="margin-top:8px">
                 ${license.features.map((feature) => `<span class="tracker-demand-chip">${esc(featureLabel(feature))}</span>`).join("")}
               </div>
@@ -3949,7 +4433,7 @@ function formatLimit(limit) {
 function featureLabel(feature) {
   return {
     tracker: "Tracker",
-    approval: "Aprovação",
+    approval: "Clientes",
     operations: "Operação",
     reports: "Relatórios",
     manualAccess: "Licença manual"
@@ -4060,6 +4544,29 @@ async function grantWorkspaceMembership(uid, role = "member") {
     await state.firebase.set(state.firebase.ref(state.firebase.db, `memberships/${uid}/${state.tenantId}`), payload);
   } catch (error) {
     setSyncState("offline", "Perfil salvo, mas o acesso do colaborador não foi liberado.");
+  }
+}
+
+async function copyWorkspaceInvite(value, successMessage) {
+  const text = String(value || "").trim();
+  if (!text) {
+    setSyncState("offline", "Convite ainda nao disponivel.");
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(text);
+    setSyncState("online", successMessage);
+  } catch (error) {
+    const input = document.createElement("textarea");
+    input.value = text;
+    input.setAttribute("readonly", "");
+    input.style.position = "fixed";
+    input.style.left = "-9999px";
+    document.body.appendChild(input);
+    input.select();
+    const copied = document.execCommand("copy");
+    input.remove();
+    setSyncState(copied ? "online" : "offline", copied ? successMessage : "Nao foi possivel copiar o convite.");
   }
 }
 
@@ -4780,17 +5287,19 @@ function normalizeTenant(raw, user) {
     };
   }
 
+  const useSeedFallback = state.demoMode || state.tenantId === "local" || !raw?.meta;
   const weeks = asArray(raw?.tracker?.weeks).length
     ? asArray(raw.tracker.weeks).map((week) => normalizeWeek(week, profiles))
-    : seed.tracker.weeks.map((week) => normalizeWeek(week, profiles));
+    : useSeedFallback ? seed.tracker.weeks.map((week) => normalizeWeek(week, profiles)) : [];
 
   const clients = raw?.approval?.clients && Object.keys(raw.approval.clients).length
     ? raw.approval.clients
-    : seed.approval.clients;
+    : useSeedFallback ? seed.approval.clients : {};
 
   Object.entries(clients).forEach(([id, client]) => {
     clients[id] = normalizeApprovalClient(client, id);
   });
+  const clientFolders = normalizeClientFolders(raw?.approval?.clientFolders || (useSeedFallback ? seed.approval.clientFolders : {}), clients);
 
   return {
     meta,
@@ -4802,7 +5311,8 @@ function normalizeTenant(raw, user) {
       trash: flattenTrash(raw?.tracker?.trash || raw?.trash)
     },
     approval: {
-      clients
+      clients,
+      clientFolders
     }
   };
 }
@@ -4843,7 +5353,31 @@ function normalizeApprovalState(rawApproval = {}) {
   Object.entries(clients).forEach(([id, client]) => {
     clients[id] = normalizeApprovalClient(client, id);
   });
-  return { clients };
+  return {
+    clients,
+    clientFolders: normalizeClientFolders(rawApproval?.clientFolders || {}, clients)
+  };
+}
+
+function normalizeClientFolders(rawFolders = {}, clients = state.data?.approval?.clients || {}) {
+  const folders = normalizeObjectCollection(rawFolders);
+  Object.entries(folders).forEach(([id, folder]) => {
+    const seen = new Set();
+    const clientIds = asArray(folder.clientIds).map(String).filter((clientId) => {
+      if (!clientId || seen.has(clientId) || !clients[clientId]) return false;
+      seen.add(clientId);
+      return true;
+    });
+    folders[id] = {
+      id: folder.id || id,
+      name: folder.name || "Grupo de clientes",
+      clientIds,
+      order: Number(folder.order || 0),
+      createdAt: folder.createdAt || Date.now(),
+      updatedAt: folder.updatedAt || folder.createdAt || Date.now()
+    };
+  });
+  return folders;
 }
 
 function normalizeAgendaEvents(value = []) {
@@ -5045,6 +5579,9 @@ function seedData(user) {
   return {
     meta: {
       name: "Workspace Krio",
+      slug: "workspace-krio",
+      inviteCode: "KRIO-DEMO1",
+      inviteUpdatedAt: Date.now(),
       plan: "manual_license",
       licenseStatus: "active",
       licenseType: "direct_sale",
@@ -5057,6 +5594,7 @@ function seedData(user) {
     profiles,
     tracker: { weeks: [week], events: [], trash: [] },
     approval: {
+      clientFolders: {},
       clients: {
         client_alpha: {
           id: "client_alpha",
@@ -5237,6 +5775,46 @@ async function copyClientPortalLink(clientId) {
   } catch {
     window.prompt("Copie o link do portal", url);
   }
+}
+function getClientFolders() {
+  return Object.values(state.data.approval.clientFolders || {}).map((folder) => ({
+    ...folder,
+    clientIds: uniqueClientIds(folder.clientIds)
+  })).sort((a, b) => {
+    const order = Number(a.order || 0) - Number(b.order || 0);
+    if (order !== 0) return order;
+    return (a.createdAt || 0) - (b.createdAt || 0);
+  });
+}
+
+function getClientFolder(id) {
+  return state.data.approval.clientFolders?.[id] || null;
+}
+
+function uniqueClientIds(ids = []) {
+  const seen = new Set();
+  return asArray(ids).map(String).filter((id) => {
+    if (!id || seen.has(id) || !getClient(id)) return false;
+    seen.add(id);
+    return true;
+  });
+}
+
+function groupedClientIdSet(exceptFolderId = "") {
+  return getClientFolders().reduce((set, folder) => {
+    if (folder.id === exceptFolderId) return set;
+    folder.clientIds.forEach((id) => set.add(id));
+    return set;
+  }, new Set());
+}
+
+function getUngroupedClients() {
+  const grouped = groupedClientIdSet();
+  return getClients().filter((client) => !grouped.has(client.id));
+}
+
+function isClientFolderOpen(id) {
+  return Boolean(state.approvalOpenClientFolders?.[id]);
 }
 
 function getApprovalGroups(client) {

@@ -91,13 +91,14 @@
 
       <div class="sidebar-footer">
         <!-- User block -->
-        <div class="user-block">
+        <button id="userBlock" class="user-block" type="button" title="Perfil" aria-label="Perfil do usuário">
           <div id="userAvatar" hidden class="avatar"></div>
           <div class="user-info">
             <span id="userName" hidden class="user-name"></span>
             <span id="userRole" hidden class="user-role"></span>
           </div>
-        </div>
+          <span id="userSettingsIcon" class="user-settings-icon" hidden aria-hidden="true"></span>
+        </button>
         <!-- Logout -->
         <button id="logoutBtn" class="logout-nav-btn" type="button" title="Sair da conta" aria-label="Sair">
           <span class="side-icon">
@@ -145,7 +146,7 @@
               <rect x="2" y="2" width="12" height="12" rx="2.5"/>
               <polyline points="5,8.5 7.5,11 11,6"/>
             </svg>
-            Aprovação
+            Clientes
           </button>
         </nav>
         <div class="app-topbar-right">
@@ -168,7 +169,7 @@
           <section id="view-operations" class="module-view" data-module-view="operations" aria-label="Operação">
             <div id="operationsModuleMount" class="module-mount"></div>
           </section>
-          <section id="view-approval" class="module-view" data-module-view="approval" aria-label="Aprovação">
+          <section id="view-approval" class="module-view" data-module-view="approval" aria-label="Clientes">
             <div id="approvalModuleMount" class="module-mount"></div>
           </section>
         </div>

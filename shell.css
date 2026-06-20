@@ -379,18 +379,33 @@ body { padding: 0; }
 
 /* User identity block */
 .user-block {
+  width: 100%;
   display: flex;
   align-items: center;
   gap: 9px;
   padding: 8px 8px;
+  border: 0;
   border-radius: var(--r-lg);
   background: transparent;
-  transition: background var(--t-base) var(--ease-out);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  appearance: none;
+  transition: background var(--t-base) var(--ease-out), color var(--t-base) var(--ease-out);
   min-width: 0;
-  cursor: default;
+  cursor: pointer;
 }
 
-.user-block:hover { background: var(--surface); }
+.user-block:hover:not(:disabled) { background: var(--surface); }
+
+.user-block:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
+.user-block:disabled {
+  cursor: default;
+}
 
 .avatar {
   width: 30px; height: 30px;
@@ -443,6 +458,27 @@ body { padding: 0; }
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.user-settings-icon {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  color: var(--muted-2);
+  border-radius: var(--r-md);
+  transition: background var(--t-base) var(--ease-out), color var(--t-base) var(--ease-out);
+}
+
+.user-block:hover:not(:disabled) .user-settings-icon {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.user-settings-icon svg {
+  width: 14px;
+  height: 14px;
 }
 
 .logout-nav-btn {
@@ -897,6 +933,7 @@ body { padding: 0; }
 .app-shell.sidebar-collapsed .brand-tagline,
 .app-shell.sidebar-collapsed #pageTitle,
 .app-shell.sidebar-collapsed .user-info,
+.app-shell.sidebar-collapsed .user-settings-icon,
 .app-shell.sidebar-collapsed .nav-count {
   display: none;
 }
@@ -957,6 +994,7 @@ body { padding: 0; }
   .app-sidebar .brand-tagline,
   .app-sidebar #pageTitle,
   .app-sidebar .user-info,
+  .app-sidebar .user-settings-icon,
   .app-sidebar .nav-count { display: none; }
 
   .app-sidebar .brand-lockup { justify-content: center; }
@@ -984,89 +1022,51 @@ body { padding: 0; }
 
 @media (max-width: 720px) {
   .app-shell {
-    grid-template-columns: 1fr;
-    grid-template-rows: 1fr;
+    display: block;
   }
 
-  /* Bottom tab bar */
   .app-sidebar {
-    position: fixed;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    top: auto;
-    height: auto;
-    min-height: 60px;
-    flex-direction: row;
-    align-items: center;
-    justify-content: center;
-    padding: 0 8px env(safe-area-inset-bottom, 0px);
-    border-right: none;
-    border-bottom: none;
-    border-top: 1px solid var(--line);
-    z-index: 300;
-    width: 100%;
+    display: none;
   }
 
-  /* Hide brand, footer, toggle controls */
-  .sidebar-head { display: none; }
-  .sidebar-footer { display: none; }
-  .sidebar-toggle { display: none; }
-  .sidebar-controls { display: none; }
-  .side-section-title { display: none; }
+  .app-body {
+    min-height: 100dvh;
+  }
 
-  .side-module-actions {
-    display: flex;
-    flex-direction: row;
-    justify-content: center;
+  .app-topbar {
+    top: 0;
+    height: 54px;
+    padding: 0 8px;
     overflow-x: auto;
-    overflow-y: hidden;
-    padding: 6px 4px;
-    flex: 1;
     scrollbar-width: none;
   }
-  .side-module-actions::-webkit-scrollbar { display: none; }
 
-  .side-nav {
-    flex-direction: row;
-    gap: 2px;
-    width: 100%;
-    justify-content: space-around;
+  .app-topbar::-webkit-scrollbar { display: none; }
+
+  .app-tab-nav {
+    min-width: max-content;
+    padding-left: 0;
   }
 
-  /* Tab bar buttons: icon + tiny label, stacked */
-  .side-nav .nav-btn {
-    flex: 1;
-    max-width: 80px;
-    height: 48px;
-    flex-direction: column;
-    justify-content: center;
-    align-items: center;
-    padding: 4px 4px;
-    gap: 3px;
-    border-radius: var(--r-md);
+  .app-tab {
+    padding: 0 11px;
+    font-size: 12px;
   }
 
-  .side-nav .nav-btn::before { display: none; }
-
-  .side-nav .nav-btn .side-icon {
-    width: 22px;
-    height: 22px;
+  .app-tab.active::after {
+    left: 11px;
+    right: 11px;
   }
 
-  /* Show short label under icon */
-  .side-nav .nav-btn .side-label {
-    display: block;
-    font-size: 9px;
-    font-weight: 500;
-    letter-spacing: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    max-width: 68px;
-    text-align: center;
+  .app-topbar-right {
+    margin-left: auto;
   }
 
-  /* Extra space at bottom so content isn't hidden behind tab bar */
-  .main { padding: 16px 14px 80px; }
+  .shell-btn {
+    height: 30px;
+    padding: 0 9px;
+    font-size: 11px;
+  }
+
+  .main { padding: 18px 10px 64px; }
 }
