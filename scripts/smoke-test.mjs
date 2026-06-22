@@ -4,7 +4,7 @@ import { chromium } from "playwright";
 
 const smokePort = process.env.KRIO_SMOKE_PORT || "8131";
 const rootUrl = process.env.KRIO_SMOKE_URL || `http://127.0.0.1:${smokePort}`;
-const appSmokePath = process.env.KRIO_SMOKE_URL ? "/app/" : "/app/index.html";
+const appSmokePath = "/app/";
 let server;
 
 if (!process.env.KRIO_SMOKE_URL) {
@@ -42,8 +42,10 @@ async function desktopSmoke(browser) {
 
   await page.goto(`${rootUrl}/index.html`, { waitUntil: "domcontentloaded" });
   await page.locator("#signupAgency").waitFor({ state: "visible" });
+  await page.locator("#signupInviteField").waitFor({ state: "hidden" });
   await page.locator("#tabLogin").click();
   await page.locator("#loginForm").waitFor({ state: "visible" });
+  await page.locator("#resetPasswordBtn").waitFor({ state: "visible" });
 
   await page.goto(`${rootUrl}${appSmokePath}?demo=1`, { waitUntil: "networkidle" });
   await page.locator("#appShell").waitFor({ state: "visible" });
@@ -52,6 +54,11 @@ async function desktopSmoke(browser) {
   await page.locator('[data-action="closeDialog"]').first().click();
   await page.locator('[data-view="approval"]').click();
   await page.locator(".krio-approval").waitFor({ state: "visible" });
+  await page.locator("[data-approval-client]").first().click();
+  await page.locator(".approval-card-open").first().click();
+  await page.locator("#creativeDetailTitle").waitFor({ state: "visible" });
+  await page.keyboard.press("Escape");
+  await page.locator("#creativeDetailTitle").waitFor({ state: "hidden" });
 
   await page.close();
   assertNoErrors(errors);
@@ -87,6 +94,8 @@ async function mobileSmoke(browser) {
 
   await page.goto(`${rootUrl}${appSmokePath}?demo=1`, { waitUntil: "networkidle" });
   await page.locator("#appShell").waitFor({ state: "visible" });
+  await page.locator('[data-view="tracker"]').click();
+  await page.locator(".tracker-mobile-hint").waitFor({ state: "visible" });
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   await page.close();
 

@@ -2,6 +2,9 @@
   "database": {
     "rules": "database.rules.json"
   },
+  "storage": {
+    "rules": "storage.rules"
+  },
   "hosting": {
     "public": ".",
     "ignore": [
@@ -21,6 +24,7 @@
       "package-lock.json",
       "firebase-debug.log",
       "firebase-debug.*.log",
+      "app.html",
       "server.err.log",
       "server.out.log",
       "*.log",

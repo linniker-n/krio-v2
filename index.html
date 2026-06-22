@@ -452,6 +452,26 @@ select.input { appearance: none; }
 
 .helper a:hover { color: var(--brand-3); text-decoration: underline; }
 
+.auth-recovery-link {
+  align-self: center;
+  border: 0;
+  padding: 2px 6px;
+  background: transparent;
+  color: var(--brand-2);
+  cursor: pointer;
+  font-family: var(--font);
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.auth-recovery-link:focus-visible {
+  outline: 2px solid var(--brand-2);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
 .msg {
   display: none;
   margin-top: 12px;
@@ -1122,11 +1142,11 @@ select.input { appearance: none; }
           <div class="auth-wrap" id="authMain">
             <div class="auth-inner">
               <h1 class="auth-heading">Bem-vindo ao Krio</h1>
-              <p class="auth-sub">Gestão criativa para agências. Crie seu workspace ou entre como colaborador da equipe.</p>
+              <p class="auth-sub">Gestão criativa para agências. Solicite a licença da sua agência ou entre pelo convite da equipe.</p>
 
               <!-- Tab switcher -->
               <div class="switcher">
-                <button type="button" id="tabSignup" class="active">Solicitar acesso</button>
+                <button type="button" id="tabSignup" class="active">Solicitar licença</button>
                 <button type="button" id="tabLogin">Entrar</button>
               </div>
 
@@ -1136,8 +1156,8 @@ select.input { appearance: none; }
                   <div class="field">
                     <label class="label" for="signupMode">Tipo de conta</label>
                     <select class="input" id="signupMode">
-                      <option value="owner">Criar workspace como admin</option>
-                      <option value="collaborator">Entrar como colaborador</option>
+                      <option value="license">Solicitar licença para a agência</option>
+                      <option value="collaborator">Entrar por convite da equipe</option>
                     </select>
                   </div>
                   <div class="field">
@@ -1173,7 +1193,7 @@ select.input { appearance: none; }
                   </div>
                 </div>
                 <div class="actions">
-                  <button class="btn-primary" id="signupSubmitBtn" type="submit">Criar workspace</button>
+                  <button class="btn-primary" id="signupSubmitBtn" type="submit">Solicitar licença</button>
                   <div class="divider-row">
                     <div class="divider-line"></div>
                     <span class="divider-text">ou</span>
@@ -1221,6 +1241,7 @@ select.input { appearance: none; }
                     Continuar com Google
                   </button>
                 </div>
+                <button class="auth-recovery-link" id="resetPasswordBtn" type="button">Esqueci minha senha</button>
                 <p class="helper">Sem acesso ainda? <a href="#" id="helperToSignup">Criar conta</a></p>
               </form>
 
@@ -1268,15 +1289,6 @@ select.input { appearance: none; }
               </a>
             </div>
           </div>
-
-          <form class="workspace-recovery" id="workspaceRecoveryForm">
-            <p class="workspace-recovery-title">Criar workspace como admin</p>
-            <p class="workspace-recovery-text">Use esta opção se esta conta for a primeira conta da equipe ou se o banco foi zerado durante os testes.</p>
-            <div class="workspace-recovery-grid">
-              <input class="input" id="workspaceRecoveryAgency" type="text" placeholder="Nome da agência" autocomplete="organization" required />
-              <button class="btn-primary" type="submit">Criar workspace</button>
-            </div>
-          </form>
 
           <button class="logout" id="logoutBtn" type="button">
             <svg viewBox="0 0 16 16" aria-hidden="true">
@@ -1414,7 +1426,7 @@ import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.0/fireba
 import {
   getAuth, onAuthStateChanged, createUserWithEmailAndPassword,
   signInWithEmailAndPassword, GoogleAuthProvider, signInWithPopup,
-  signOut, updateProfile
+  signOut, updateProfile, sendPasswordResetEmail
 } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
 import {
   getDatabase, ref, get, set, update
@@ -1450,8 +1462,6 @@ const authView = document.getElementById('authView');
 const sessionView = document.getElementById('sessionView');
 const sessionMeta = document.getElementById('sessionMeta');
 const pendingNotice = document.getElementById('pendingNotice');
-const workspaceRecoveryForm = document.getElementById('workspaceRecoveryForm');
-const workspaceRecoveryAgency = document.getElementById('workspaceRecoveryAgency');
 const message = document.getElementById('message');
 const initialInviteCode = inviteCodeFromLocation();
 const initialInviteWorkspace = inviteWorkspaceFromLocation();
@@ -1535,7 +1545,7 @@ async function generateUniqueInviteCode(seed='KRIO'){
 }
 
 function updateSignupMode(){
-  signupMode.value = hasInitialInvite ? 'collaborator' : 'owner';
+  signupMode.value = hasInitialInvite ? 'collaborator' : 'license';
   const ownerMode = !hasInitialInvite;
   signupMode.closest('.field').classList.add('hidden');
   signupAgency.closest('.field').classList.toggle('hidden', !ownerMode);
@@ -1543,8 +1553,8 @@ function updateSignupMode(){
   signupInviteField.classList.add('hidden');
   signupAgency.required = ownerMode;
   signupInvite.required = false;
-  tabSignup.textContent = ownerMode ? 'Criar workspace' : 'Solicitar acesso';
-  signupSubmitBtn.textContent = ownerMode ? 'Criar workspace' : 'Solicitar entrada';
+  tabSignup.textContent = ownerMode ? 'Solicitar licença' : 'Entrar na equipe';
+  signupSubmitBtn.textContent = ownerMode ? 'Solicitar licença' : 'Solicitar entrada';
 }
 
 async function ensureUserNode(user, nameFallback=''){
@@ -1728,7 +1738,7 @@ async function requestManualAccess(user,{agencyName='',userName='',inviteCode=''
   const tenant = normalizedInvite
     ? await findTenantByInvite(inviteCode || normalizedInvite, inviteWorkspace || current.tenantId || '')
     : null;
-  if(!tenant?.tenantId) {
+  if(normalizedInvite && !tenant?.tenantId) {
     return {
       status:'blocked',
       request: {
@@ -1738,25 +1748,15 @@ async function requestManualAccess(user,{agencyName='',userName='',inviteCode=''
       }
     };
   }
-  if(false && !tenant?.tenantId) {
-    return {
-      ...current,
-      status:'blocked',
-      request: {
-        reason: 'Nenhum workspace encontrado para o domínio deste email. Peça para o admin criar o workspace ou liberar seu acesso.'
-      },
-      reason: 'Nenhum workspace encontrado para o domínio deste email. Peça para o admin criar o workspace ou liberar seu acesso.'
-    };
-  }
   const payload = {
     ...current,
     uid: user.uid,
-    tenantId: tenant.tenantId,
-    agencyName: agencyName || current.agencyName || tenant.name || user.email?.split('@')[1]?.split('.')[0] || 'Minha Agência',
+    ...(tenant?.tenantId ? { tenantId: tenant.tenantId } : {}),
+    agencyName: agencyName || current.agencyName || tenant?.name || user.email?.split('@')[1]?.split('.')[0] || 'Minha Agência',
     userName: user.displayName || userName || current.userName || 'Usuário',
     email: user.email || current.email || '',
     photoURL: user.photoURL || current.photoURL || '',
-    inviteCode: tenant.inviteCode || normalizedInvite || current.inviteCode || '',
+    ...(tenant?.inviteCode || normalizedInvite || current.inviteCode ? { inviteCode: tenant?.inviteCode || normalizedInvite || current.inviteCode } : {}),
     status: 'pending',
     source,
     requestedAt: current.requestedAt || now,
@@ -1764,7 +1764,7 @@ async function requestManualAccess(user,{agencyName='',userName='',inviteCode=''
   };
   await update(ref(db), {
     [`accessRequests/${user.uid}`]: payload,
-    [`tenantAccessRequests/${tenant.tenantId}/${user.uid}`]: payload
+    ...(tenant?.tenantId ? { [`tenantAccessRequests/${tenant.tenantId}/${user.uid}`]: payload } : {})
   });
   return payload;
 }
@@ -1773,7 +1773,10 @@ async function resolveAccess(user,context={}){
   await ensureUserNode(user,context.userName || '');
   const active = await getActiveMembership(user);
   if(active) return { status:'active', ...active };
-  if(context.mode === 'owner') return createOwnerWorkspace(user,context);
+  if(context.mode === 'license') {
+    const request = await requestManualAccess(user,context);
+    return { status: request.status || 'pending', request };
+  }
   if(context.mode === 'collaborator') return requestCollaboratorAccess(user,context);
   const request = await requestManualAccess(user,context);
   return { status: request.status || 'pending', request };
@@ -1812,7 +1815,6 @@ function buildSessionMeta(user, access){
   const role = access?.membership?.role || null;
   const isPending = access?.status !== 'active';
   const blockedReason = access?.request?.reason || access?.request?.request?.reason || access?.reason || '';
-  const canCreateWorkspace = isPending && !tenantId && !hasInitialInvite;
   const statusBadge = isPending
     ? `<span class="status-badge pending">${blockedReason ? 'Sem workspace' : 'Aguardando aprovação'}</span>`
     : '<span class="status-badge active">Acesso ativo</span>';
@@ -1873,10 +1875,6 @@ function buildSessionMeta(user, access){
   pendingNotice.style.display = isPending ? 'block' : 'none';
   if (blockedReason) pendingNotice.querySelector('p').textContent = blockedReason;
   else pendingNotice.querySelector('p').textContent = 'Sua solicitação está na fila do administrador do workspace. Você será liberado quando o acesso for aprovado.';
-  workspaceRecoveryForm.classList.toggle('show', canCreateWorkspace);
-  if (canCreateWorkspace && !workspaceRecoveryAgency.value.trim()) {
-    workspaceRecoveryAgency.value = user.email?.split('@')[1]?.split('.')[0] || '';
-  }
 }
 
 async function renderSession(user, access){
@@ -1912,7 +1910,7 @@ updateSignupMode();
 
 signupForm.addEventListener('submit', async (e)=>{
   e.preventDefault(); hideMessage();
-  const mode = hasInitialInvite ? 'collaborator' : signupMode.value;
+  const mode = hasInitialInvite ? 'collaborator' : 'license';
   const agencyName = signupAgency.value.trim();
   const role = signupRole.value;
   const inviteCode = normalizeInviteCode(signupInvite.value || initialInviteCode);
@@ -1921,7 +1919,7 @@ signupForm.addEventListener('submit', async (e)=>{
   const password = document.getElementById('signupPassword').value;
   try {
     isBootstrapping = true;
-    if(mode === 'owner' && !agencyName) throw new Error('Informe o nome da agência para criar o workspace.');
+    if(mode === 'license' && !agencyName) throw new Error('Informe o nome da agência para solicitar a licença.');
     if(mode === 'collaborator' && !inviteCode) throw new Error('Informe o link de convite enviado pelo admin.');
     const { user } = await createUserWithEmailAndPassword(auth, email, password);
     if(userName) await updateProfile(user,{displayName:userName});
@@ -1947,8 +1945,8 @@ async function handleGoogleAuth(){
     isBootstrapping = true; hideMessage();
     const { user } = await signInWithPopup(auth, provider);
     const signupVisible = signupForm.classList.contains('active');
-    const mode = hasInitialInvite ? 'collaborator' : (signupVisible ? signupMode.value : 'login');
-    const agencyName = signupVisible && mode === 'owner'
+    const mode = hasInitialInvite ? 'collaborator' : (signupVisible ? 'license' : 'login');
+    const agencyName = signupVisible && mode === 'license'
       ? (signupAgency.value.trim() || user.email?.split('@')[1]?.split('.')[0] || 'Minha Agência')
       : '';
     await enterIfActive(user,{agencyName, userName:user.displayName||'', role: signupRole.value, mode, inviteCode: normalizeInviteCode(signupInvite.value || initialInviteCode), source:'google'});
@@ -1958,30 +1956,18 @@ async function handleGoogleAuth(){
 
 document.getElementById('googleBtn').addEventListener('click', handleGoogleAuth);
 document.getElementById('googleLoginBtn').addEventListener('click', handleGoogleAuth);
-workspaceRecoveryForm.addEventListener('submit', async (e) => {
-  e.preventDefault();
-  hideMessage();
-  const user = auth.currentUser;
-  const agencyName = workspaceRecoveryAgency.value.trim();
-  if (!user) {
-    showMessage('Faça login novamente para criar o workspace.');
-    return;
-  }
-  if (!agencyName) {
-    showMessage('Informe o nome da agência para criar o workspace.');
+document.getElementById('resetPasswordBtn').addEventListener('click', async () => {
+  const email = document.getElementById('loginEmail').value.trim();
+  if (!email) {
+    showMessage('Informe seu email para receber o link de recuperação.');
+    document.getElementById('loginEmail').focus();
     return;
   }
   try {
-    isBootstrapping = true;
-    await createOwnerWorkspace(user, {
-      agencyName,
-      userName: user.displayName || user.email?.split('@')[0] || ''
-    });
-    window.location.href = '/app/';
+    await sendPasswordResetEmail(auth, email);
+    showMessage('Enviamos um link de recuperação para seu email.', 'success');
   } catch(error) {
     showMessage(mapAuthError(error));
-  } finally {
-    isBootstrapping = false;
   }
 });
 document.getElementById('logoutBtn').addEventListener('click', ()=>signOut(auth));

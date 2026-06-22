@@ -93,6 +93,7 @@ const state = {
   data: null,
   route: appRoute,
   portalIndex: null,
+  portalResponses: {},
   activeView: appRoute.mode === "clientPortal" ? "approval" : "dashboard",
   trackerView: "week",
   trackerFilter: "all",
@@ -290,11 +291,15 @@ function canManageWorkspace() {
 }
 
 function canEditAgenda() {
-  return canManageWorkspace() || isCreatorAccessRole();
+  return canManageWorkspace();
 }
 
 function canManageDemand(personId) {
   return canManageWorkspace() || (isCreatorAccessRole() && personId === currentPersonId());
+}
+
+function canManageCreative(found) {
+  return canManageWorkspace() || (isCreatorAccessRole() && found?.creative?.assigneeId === currentPersonId());
 }
 
 function isCreatorProfile(person = {}) {
@@ -444,13 +449,16 @@ async function loadFirebase() {
 
 async function uploadFileToStorage(file, path) {
   const fb = state.firebase;
-  if (!fb?.storage || !file?.size) return "";
+  if (!file?.size) return "";
+  if (!file.type?.startsWith("image/")) throw new Error("Use um arquivo de imagem válido.");
+  if (file.size > 8 * 1024 * 1024) throw new Error("Cada imagem deve ter no máximo 8 MB.");
+  if (!fb?.storage) throw new Error("O armazenamento de imagens não está disponível.");
   try {
     const storageRef = fb.storageRef(fb.storage, path);
     const snapshot = await fb.uploadBytes(storageRef, file);
     return await fb.getDownloadURL(snapshot.ref);
-  } catch {
-    return "";
+  } catch (error) {
+    throw new Error("Não foi possível enviar a imagem. Tente novamente.");
   }
 }
 
@@ -496,45 +504,50 @@ async function loadTenantForUser(user) {
     approval: approvalSnap.val() || {}
   };
   state.tenantMeta = tenant.meta || {};
-  const localCopy = loadLocalState();
-  state.data = normalizeTenant(localCopy || tenant, user);
+  state.data = normalizeTenant(tenant, user);
   await ensureWorkspaceInviteCode();
+  const addedPortalTokens = ensureClientPortalTokens();
 
-  if (!asArray(tenant.tracker?.weeks).length || localCopy) {
+  if (!asArray(tenant.tracker?.weeks).length) {
+    currentWeek();
     await persistNow();
+  } else if (addedPortalTokens) {
+    await persistNow();
+  } else {
+    saveLocalState();
   }
 }
 
 async function loadClientPortalForRoute() {
-  const clientId = state.route.clientId;
-  if (!clientId) throw new Error("portal-missing");
+  const token = state.route.clientId;
+  if (!token) throw new Error("portal-missing");
   const fb = state.firebase;
-  const portalSnap = await fb.get(fb.ref(fb.db, `approvalPortals/${clientId}`));
+  const portalSnap = await fb.get(fb.ref(fb.db, `approvalPortals/${token}`));
   const portal = portalSnap.val() || {};
-  const tenantId = portal.tenantId || "";
-  const portalClientId = portal.clientId || clientId;
-  if (!tenantId || !portalClientId) throw new Error("portal-missing");
+  const meta = portal.meta || {};
+  const tenantId = meta.tenantId || "";
+  const portalClientId = meta.clientId || "";
+  if (!tenantId || !portalClientId || meta.status !== "active" || !portal.client) throw new Error("portal-missing");
 
-  const clientSnap = await fb.get(fb.ref(fb.db, `tenants/${tenantId}/approval/clients/${portalClientId}`));
-  if (!clientSnap.exists()) throw new Error("client-missing");
-
-  const client = normalizeApprovalClient(clientSnap.val(), portalClientId);
+  const client = normalizeApprovalClient(portal.client, portalClientId);
   state.tenantId = tenantId;
   state.approvalClientId = portalClientId;
   state.portalIndex = {
-    ...portal,
+    token,
+    ...meta,
     tenantId,
     clientId: portalClientId,
-    workspaceName: portal.workspaceName || "Krio"
+    workspaceName: meta.workspaceName || "Krio"
   };
+  state.portalResponses = collectionById(asArray(portal.responses));
   state.membership = { role: "client", status: "active" };
   state.user = {
     uid: `guest_${portalClientId}`,
-    displayName: client.name || portal.clientName || "Cliente",
-    email: client.email || ""
+    displayName: client.name || meta.clientName || "Cliente",
+    email: ""
   };
   state.tenantMeta = {
-    name: portal.workspaceName || "Krio"
+    name: meta.workspaceName || "Krio"
   };
   state.data = {
     meta: state.tenantMeta,
@@ -729,16 +742,22 @@ function finishClientPortalBoot() {
 
 function setupClientPortalSync() {
   stopRealtimeSync();
-  if (!state.firebase?.db || state.demoMode || state.tenantId === "local" || !state.approvalClientId) return;
+  const token = state.portalIndex?.token || state.route?.clientId;
+  if (!state.firebase?.db || state.demoMode || state.tenantId === "local" || !token) return;
 
   const fb = state.firebase;
-  const path = `tenants/${state.tenantId}/approval/clients/${state.approvalClientId}`;
+  const path = `approvalPortals/${token}`;
   const unsubscribe = fb.onValue(
     fb.ref(fb.db, path),
     (snapshot) => {
-      const client = snapshot.val();
-      if (!client) return;
-      state.data.approval.clients[state.approvalClientId] = normalizeApprovalClient(client, state.approvalClientId);
+      const portal = snapshot.val() || {};
+      const meta = portal.meta || {};
+      const clientId = meta.clientId || state.approvalClientId;
+      if (!clientId || meta.status !== "active" || !portal.client) return;
+      state.portalIndex = { ...state.portalIndex, ...meta, token };
+      state.approvalClientId = clientId;
+      state.data.approval.clients[clientId] = normalizeApprovalClient(portal.client, clientId);
+      state.portalResponses = collectionById(asArray(portal.responses));
       render();
       setSyncState("online", "Portal atualizado");
     },
@@ -860,6 +879,30 @@ function setupRealtimeSync() {
         scheduleRealtimeRender("Atualizado em tempo real");
       },
       () => setSyncState("offline", "Tempo real indisponível")
+    );
+    state.realtimeUnsubs.push(unsubscribe);
+  });
+
+  if (canManageWorkspace()) setupAdminPortalResponseSync();
+}
+
+function setupAdminPortalResponseSync() {
+  const fb = state.firebase;
+  if (!fb?.db) return;
+  state.portalResponses = {};
+  getClients().forEach((client) => {
+    const token = client.portalToken;
+    if (!token) return;
+    const unsubscribe = fb.onValue(
+      fb.ref(fb.db, `approvalPortals/${token}/responses`),
+      (snapshot) => {
+        const responses = collectionById(asArray(snapshot.val()));
+        Object.entries(responses).forEach(([id, response]) => {
+          state.portalResponses[id] = response;
+        });
+        scheduleRealtimeRender("Retorno do cliente atualizado");
+      },
+      () => setSyncState("offline", "Não foi possível atualizar os retornos do cliente")
     );
     state.realtimeUnsubs.push(unsubscribe);
   });
@@ -1045,6 +1088,7 @@ function handleClick(event) {
     },
     openBriefingDialog: () => openBriefingDialog(button.dataset.client || ""),
     copyClientPortalLink: () => copyClientPortalLink(button.dataset.client || ""),
+    rotateClientPortalLink: () => rotateClientPortalLink(button.dataset.client || ""),
     toggleDemandMenu: () => {
       const article = button.closest(".tracker-demand-item");
       if (!article) return;
@@ -1098,6 +1142,8 @@ function handleClick(event) {
     openInternalRejectionDialog: () => openInternalRejectionDialog(button.dataset.id),
     sendToClientBoard: () => sendToClientBoard(button.dataset.id),
     clientApproveCreative: () => clientApproveCreative(button.dataset.id),
+    applyClientApproval: () => applyClientApproval(button.dataset.id, button.dataset.response),
+    applyClientRejection: () => applyClientRejection(button.dataset.id, button.dataset.response),
     openClientRejectionDialog: () => openClientRejectionDialog(button.dataset.id),
     markCreativeCorrected: () => markCreativeCorrected(button.dataset.id),
     markCreativePosted: () => markCreativePosted(button.dataset.id),
@@ -1132,6 +1178,7 @@ function canRunAction(action, button) {
     "openClientDialog",
     "openClientManagement",
     "openBriefingDialog",
+    "rotateClientPortalLink",
     "deleteClient",
     "openClientFolderDialog",
     "deleteClientFolder",
@@ -1147,6 +1194,13 @@ function canRunAction(action, button) {
   if (["editDemand", "toggleDemand", "deleteDemand", "toggleTimer", "openTimerEdit", "resetTime", "openDemandNote", "cycleDifficulty"].includes(action)) {
     const found = findDemand(button.dataset.id);
     return Boolean(found && canManageDemand(found.personId));
+  }
+  if (["openCreativeDetail", "openCreativeDialog", "markCreativeCorrected"].includes(action)) {
+    const found = button.dataset.id ? findCreative(button.dataset.id) : null;
+    return found ? canManageCreative(found) : canManageWorkspace();
+  }
+  if (["deleteCreative", "setCreativeStatus", "openInternalRejectionDialog", "sendToClientBoard", "markCreativePosted", "openGroupDialog"].includes(action)) {
+    return canManageWorkspace();
   }
   return true;
 }
@@ -1206,6 +1260,10 @@ function handleSubmit(event) {
   if (form.id === "clientRejectionForm") {
     event.preventDefault();
     saveClientRejectionForm(form);
+  }
+  if (form.id === "portalApprovalForm") {
+    event.preventDefault();
+    savePortalApprovalForm(form);
   }
   if (form.id === "internalRejectionForm") {
     event.preventDefault();
@@ -1481,18 +1539,23 @@ function handleApprovalFieldChange(event) {
 
 function handleApprovalKeydown(event) {
   const inline = event.target.closest("[data-approval-inline]");
-  if (!inline) return;
-  if (event.key === "Enter") {
+  if (inline && event.key === "Enter") {
     event.preventDefault();
     inline.blur();
   }
-  if (event.key === "Escape") {
+  if (inline && event.key === "Escape") {
     inline.value = inline.dataset.originalValue || "";
     inline.blur();
+    return;
+  }
+  if (event.key === "Escape" && ($("#trackerDialogHost")?.innerHTML || $("#approvalDialogHost")?.innerHTML)) {
+    closeDialogs();
+    return;
   }
 }
 
 function updateApprovalInlineField(input) {
+  if (!canManageWorkspace()) return;
   const value = String(input.value || "").trim();
   const field = input.dataset.approvalInline;
   if (!value) {
@@ -1524,6 +1587,7 @@ function updateApprovalInlineField(input) {
 }
 
 function updateScheduleField(input) {
+  if (!canManageWorkspace()) return;
   const found = findCreative(input.dataset.id);
   if (!found?.creative) return;
   const field = input.dataset.scheduleField;
@@ -1913,6 +1977,7 @@ function renderDashboard() {
   const queue = getApprovalQueueStats();
   const clients = getClients();
   const refactions = getRefactionCreatives();
+  const isEmptyWorkspace = !clients.length && !creatorWeekRefs.length;
   const upcoming = creatorWeekRefs
     .filter(({ demand }) => !demand.done)
     .sort((a, b) => String(a.demand.dueDate || "9999").localeCompare(String(b.demand.dueDate || "9999")))
@@ -1939,6 +2004,15 @@ function renderDashboard() {
         ${dashboardKpi(queue.clientReview, "No quadro do cliente", "Aguardando retorno")}
         ${dashboardKpi(refactions.length, "Refações", "Precisam de ajuste")}
       </div>
+
+      ${isEmptyWorkspace ? `<section class="dashboard-onboarding" aria-label="Primeiros passos">
+        <div><span class="dashboard-eyebrow">Primeiros passos</span><h2>Organize o primeiro ciclo em poucos minutos.</h2><p>Cadastre um cliente, registre um briefing e acompanhe a entrega no Tracker.</p></div>
+        <ol>
+          <li><strong>1. Cliente</strong><button class="krio-btn small" type="button" data-action="openClientDialog">Cadastrar</button></li>
+          <li><strong>2. Briefing</strong><button class="krio-btn small" type="button" data-action="openBriefingDialog">Registrar</button></li>
+          <li><strong>3. Produção</strong><button class="krio-btn small" type="button" data-action="openTracker">Abrir Tracker</button></li>
+        </ol>
+      </section>` : ""}
 
       <div class="dashboard-grid">
         <section class="dashboard-panel">
@@ -2148,6 +2222,7 @@ function renderTracker() {
       </div>
 
       <div class="tracker-panel">
+        <p class="tracker-mobile-hint" aria-hidden="true">Deslize para ver as pessoas da equipe.</p>
         <div class="tracker-team-grid">
           ${getVisibleProfiles().map((person) => renderPersonColumn(week, person, filteredTypes)).join("")}
         </div>
@@ -2275,6 +2350,7 @@ function renderClientManagementCard(client) {
       <div class="client-management-actions">
         <button class="krio-btn small" type="button" data-action="copyClientPortalLink" data-client="${attr(client.id)}">${icons.send} Copiar link</button>
         ${canManageWorkspace() ? `
+          <button class="krio-btn small" type="button" data-action="rotateClientPortalLink" data-client="${attr(client.id)}">Gerar novo link</button>
           <button class="krio-btn small" type="button" data-action="openBriefingDialog" data-client="${attr(client.id)}">${icons.plus} Briefing</button>
           <button class="krio-icon-btn" type="button" title="Editar cliente" aria-label="Editar cliente" data-action="openClientDialog" data-id="${attr(client.id)}">${icons.edit}</button>` : ""}
       </div>
@@ -3027,7 +3103,7 @@ function approvalSectionCopy(status) {
     },
     scheduled: {
       title: "Agendamento",
-      text: "Defina data e ordem de publicação. Após a data, a peça entra em Postados."
+      text: "Defina data e ordem de publicação. Marque como postado somente após a confirmação da publicação."
     },
     posted: {
       title: "Postados",
@@ -3089,10 +3165,20 @@ function renderClientApprovalBoard(creatives, client) {
   return renderGroupedCreativeBoard(
     creatives,
     client,
-    (creative) => renderCreativeCard(creative, creative.groupId, true, `
-        <button class="krio-btn primary" type="button" data-action="clientApproveCreative" data-id="${attr(creative.id)}">${icons.check} Aprovar</button>
-        <button class="krio-btn danger" type="button" data-action="openClientRejectionDialog" data-id="${attr(creative.id)}">Solicitar ajuste</button>
-      `),
+    (creative) => {
+      const response = getPortalResponseForCreative(creative.id);
+      const actions = isClientPortalRoute()
+        ? response
+          ? `<span class="approval-status clientReview">Retorno enviado</span>`
+          : `<button class="krio-btn primary" type="button" data-action="clientApproveCreative" data-id="${attr(creative.id)}">${icons.check} Aprovar</button>
+             <button class="krio-btn danger" type="button" data-action="openClientRejectionDialog" data-id="${attr(creative.id)}">Solicitar ajuste</button>`
+        : response
+          ? `<div class="approval-client-response"><strong>${response.decision === "approved" ? "Cliente aprovou" : "Cliente pediu ajuste"}</strong>${response.comment ? `<span>${esc(response.comment)}</span>` : ""}</div>
+             <button class="krio-btn primary" type="button" data-action="applyClientApproval" data-id="${attr(creative.id)}" data-response="${attr(response.id)}">Aplicar aprovação</button>
+             <button class="krio-btn danger" type="button" data-action="applyClientRejection" data-id="${attr(creative.id)}" data-response="${attr(response.id)}">Aplicar ajuste</button>`
+          : `<span class="approval-status clientReview">Aguardando retorno no portal</span>`;
+      return renderCreativeCard(creative, creative.groupId, true, actions);
+    },
     `<div class="approval-empty">Nenhuma peça enviada para ${esc(client.name)} ainda.</div>`,
     "client-board"
   );
@@ -3178,13 +3264,14 @@ function renderCreativeCard(creative, groupId = creative.groupId || "", flat = f
   const status = normalizeApprovalStatus(creative.status);
   const canDrag = status === "prov" && !flat;
   return `
-    <article class="approval-creative ${flat ? "flat" : ""} ${attr(status)}${creative.revisionAlert ? " has-revision" : ""}" role="button" tabindex="0" draggable="${canDrag ? "true" : "false"}" data-action="openCreativeDetail" data-id="${attr(creative.id)}" data-group="${attr(groupId)}">
+    <article class="approval-creative ${flat ? "flat" : ""} ${attr(status)}${creative.revisionAlert ? " has-revision" : ""}" draggable="${canDrag ? "true" : "false"}" data-action="openCreativeDetail" data-id="${attr(creative.id)}" data-group="${attr(groupId)}">
       ${renderCreativeCover(creative)}
       <div class="approval-creative-body">
-        <input class="approval-card-title-input" data-approval-inline="creativeTitle" data-id="${attr(creative.id)}" data-original-value="${attr(creative.title || "Sem título")}" value="${attr(creative.title || "Sem título")}" aria-label="Título da peça">
+        ${canManageWorkspace() ? `<input class="approval-card-title-input" data-approval-inline="creativeTitle" data-id="${attr(creative.id)}" data-original-value="${attr(creative.title || "Sem título")}" value="${attr(creative.title || "Sem título")}" aria-label="Título da peça">` : `<h3 class="approval-card-title">${esc(creative.title || "Sem título")}</h3>`}
         ${creative.caption ? `<span class="approval-caption">${esc(creative.caption)}</span>` : ""}
         ${creative.groupName && flat ? `<span>${esc(creative.groupName)}</span>` : ""}
         <small>${esc(approvalStatuses[status] || "Provisório")}${commentCount ? ` · ${commentCount} comentário(s)` : ""}</small>
+        <button class="approval-card-open" type="button" data-action="openCreativeDetail" data-id="${attr(creative.id)}">Ver detalhes</button>
         ${creative.revisionAlert ? `<small class="approval-alert">Refação: ${esc(creative.revisionAlert)}</small>` : ""}
         ${actions ? `<div class="approval-card-actions">${actions}</div>` : ""}
       </div>
@@ -3612,7 +3699,7 @@ function openClientDialog(id = "") {
           <label class="approval-field">Nome
             <input class="krio-input" name="name" required value="${attr(client?.name || "")}" placeholder="Nome do cliente">
           </label>
-          <label class="approval-field">Email de acesso
+          <label class="approval-field">Email de contato
             <input class="krio-input" name="email" type="email" value="${attr(client?.email || "")}" placeholder="cliente@empresa.com">
           </label>
           ${colorPickerField("Cor", "color", client?.color || "#3B82F6", "approval-field")}
@@ -3640,9 +3727,15 @@ async function saveClientForm(form) {
   if (!name) return;
   const existing = state.data.approval.clients[id] || { groups: {} };
   const logoFile = formData.get("logoFile");
-  const logoUrl = logoFile?.size
-    ? (await uploadFileToStorage(logoFile, `tenants/${state.tenantId}/clients/${id}/logo_${Date.now()}`) || await fileToDataUrl(logoFile))
-    : existing.logoUrl || "";
+  let logoUrl = existing.logoUrl || "";
+  try {
+    if (logoFile?.size) {
+      logoUrl = await uploadFileToStorage(logoFile, `tenants/${state.tenantId}/clients/${id}/logo_${newId("file")}`);
+    }
+  } catch (error) {
+    setSyncState("offline", error.message || "Não foi possível enviar o logo.");
+    return;
+  }
 
   state.data.approval.clients[id] = {
     ...existing,
@@ -3652,6 +3745,7 @@ async function saveClientForm(form) {
     color: String(formData.get("color") || "#3B82F6"),
     logoUrl,
     portalEnabled: true,
+    portalToken: existing.portalToken || createPortalToken(),
     portalCreatedAt: existing.portalCreatedAt || Date.now(),
     portalUpdatedAt: Date.now()
   };
@@ -3661,22 +3755,23 @@ async function saveClientForm(form) {
   saveAndRender();
 }
 
-function deleteClient(id) {
+async function deleteClient(id) {
+  const token = getClient(id)?.portalToken || "";
   delete state.data.approval.clients[id];
   getClientFolders().forEach((folder) => {
     const stored = getClientFolder(folder.id);
     if (stored) stored.clientIds = uniqueClientIds(stored.clientIds).filter((clientId) => clientId !== id);
   });
   if (state.approvalClientId === id) state.approvalClientId = null;
-  removeClientPortalIndex(id);
+  await removeClientPortalIndex(token);
   closeDialogs();
   saveAndRender();
 }
 
-async function removeClientPortalIndex(id) {
-  if (!id || !state.firebase?.db || state.demoMode || state.tenantId === "local") return;
+async function removeClientPortalIndex(token) {
+  if (!token || !state.firebase?.db || state.demoMode || state.tenantId === "local") return;
   try {
-    await state.firebase.set(state.firebase.ref(state.firebase.db, `approvalPortals/${id}`), null);
+    await state.firebase.set(state.firebase.ref(state.firebase.db, `approvalPortals/${token}`), null);
   } catch {
     setSyncState("offline", "Não foi possível remover o link do portal.");
   }
@@ -3884,10 +3979,13 @@ function openCreativeDialog(id = "", defaults = {}) {
 
   const found = id ? findCreative(id, client) : null;
   const creative = found?.creative || null;
+  if (!canManageWorkspace() && (!found || !canManageCreative(found))) return;
   const selectedGroupId = defaults.groupId || found?.groupId || groups[0]?.id || "";
   const media = creative ? getCreativeMedia(creative) : [];
   const preview = renderCreativeMediaPreview(media);
   const driveUrl = creative?.driveUrl || getCreativeLinks(creative || {})[0]?.url || "";
+  const creators = getCreatorProfiles();
+  const linkedDemands = getCreatorDemandRefs().filter(({ demand }) => !demand.clientId || demand.clientId === client.id || demand.client === client.name);
   $("#approvalDialogHost").innerHTML = `
     <div class="approval-dialog-backdrop" data-dialog-backdrop>
       <div class="approval-dialog" role="dialog" aria-modal="true" aria-labelledby="creativeDialogTitle">
@@ -3910,6 +4008,19 @@ function openCreativeDialog(id = "", defaults = {}) {
               ${groups.map((group) => `<option value="${attr(group.id)}" ${group.id === selectedGroupId ? "selected" : ""}>${esc(group.name)}</option>`).join("")}
             </select>
           </label>
+          ${canManageWorkspace() ? `
+            <label class="approval-field">Responsável pela peça
+              <select class="krio-input" name="assigneeId">
+                <option value="">Sem responsável</option>
+                ${creators.map((person) => `<option value="${attr(person.id)}" ${person.id === creative?.assigneeId ? "selected" : ""}>${esc(person.name)}</option>`).join("")}
+              </select>
+            </label>
+            <label class="approval-field">Demanda vinculada
+              <select class="krio-input" name="demandId">
+                <option value="">Sem vínculo</option>
+                ${linkedDemands.map(({ demand }) => `<option value="${attr(demand.id)}" ${demand.id === creative?.demandId ? "selected" : ""}>${esc(demand.title)}</option>`).join("")}
+              </select>
+            </label>` : ""}
           <div class="approval-field">
             Imagens
             <div class="approval-upload-zone" data-approval-upload-zone>
@@ -3942,17 +4053,24 @@ async function saveCreativeForm(form) {
   if (!targetGroup) return;
 
   const existing = findCreative(id, client);
+  if (!canManageWorkspace() && (!existing || !canManageCreative(existing))) return;
   if (existing && existing.groupId !== groupId) {
+    if (!canManageWorkspace()) return;
     delete existing.group.cards[id];
   }
 
   const imageFiles = formData.getAll("imageFiles").filter((file) => file?.size && file.type?.startsWith("image/"));
-  const uploadedMedia = await Promise.all(imageFiles.map(async (file, index) => {
-    const storagePath = `tenants/${state.tenantId}/creatives/${id}/media_${Date.now()}_${index}`;
-    const storageUrl = await uploadFileToStorage(file, storagePath);
-    const url = storageUrl || await fileToDataUrl(file, { outputType: "image/jpeg", quality: 0.78, maxSide: 1440, background: "#ffffff" });
-    return { id: newId("media"), type: "image", url, label: file.name || `Imagem ${index + 1}`, createdAt: Date.now() };
-  }));
+  let uploadedMedia;
+  try {
+    uploadedMedia = await Promise.all(imageFiles.map(async (file, index) => {
+      const storagePath = `tenants/${state.tenantId}/creatives/${id}/media_${newId("file")}_${index}`;
+      const url = await uploadFileToStorage(file, storagePath);
+      return { id: newId("media"), type: "image", url, label: file.name || `Imagem ${index + 1}`, createdAt: Date.now() };
+    }));
+  } catch (error) {
+    setSyncState("offline", error.message || "Não foi possível enviar as imagens.");
+    return;
+  }
   const driveUrl = String(formData.get("driveUrl") || "").trim();
   const existingMedia = existing?.creative ? getCreativeMedia(existing.creative) : [];
   const existingLink = existingMedia.find((item) => item.type === "link");
@@ -3982,9 +4100,24 @@ async function saveCreativeForm(form) {
     imageUrl: firstImage,
     driveUrl,
     groupId,
+    assigneeId: canManageWorkspace()
+      ? String(formData.get("assigneeId") || "")
+      : existing?.creative?.assigneeId || "",
+    demandId: canManageWorkspace()
+      ? String(formData.get("demandId") || "")
+      : existing?.creative?.demandId || "",
     createdAt: existing?.creative?.createdAt || Date.now(),
     updatedAt: Date.now()
   };
+  if (!canManageWorkspace()) {
+    targetGroup.cards[id].status = "prov";
+    targetGroup.cards[id].correctedAt = Date.now();
+    state.approvalStatus = "prov";
+    closeDialogs();
+    await persistCreativeCard({ ...existing, creative: targetGroup.cards[id] });
+    render();
+    return;
+  }
   state.approvalStatus = targetGroup.cards[id].status || "prov";
   closeDialogs();
   saveAndRender();
@@ -4020,10 +4153,10 @@ function openCreativeDetail(id) {
                 <span>${esc(formatDateTime(comment.createdAt))}</span>
               </article>`).join("") || `<div class="approval-empty small">Sem comentários ainda.</div>`}
           </div>
-          <form id="commentForm" class="approval-comment-form" data-id="${attr(id)}">
+          ${canManageWorkspace() ? `<form id="commentForm" class="approval-comment-form" data-id="${attr(id)}">
             <input class="krio-input" name="comment" required placeholder="Adicionar comentário">
             <button class="krio-btn primary" type="submit">Enviar</button>
-          </form>
+          </form>` : ""}
         </section>
       </div>
     </div>`;
@@ -4054,7 +4187,7 @@ function renderCreativeDetailActions(found) {
 
   if (status === "internalRejected") {
     if (!canManage) {
-      return `<button class="krio-btn primary" type="button" data-action="markCreativeCorrected" data-id="${attr(id)}">${icons.check} Corrigido</button>`;
+      return `<button class="krio-btn primary" type="button" data-action="openCreativeDialog" data-id="${attr(id)}">${icons.edit} Ajustar e reenviar</button>`;
     }
     return `
       <button class="krio-btn primary" type="button" data-action="markCreativeCorrected" data-id="${attr(id)}">${icons.check} Corrigido</button>
@@ -4092,7 +4225,7 @@ function saveCommentForm(form) {
   if (canManageWorkspace() && !isClientPortalRoute()) {
     persist();
   } else {
-    persistCreativeCard(found);
+    return;
   }
   openCreativeDetail(creative.id);
   if (isClientPortalRoute()) renderClientPortal();
@@ -4166,10 +4299,12 @@ function setCreativeStatus(id, status) {
   saveAndRender();
 }
 
-function sendToClientBoard(id) {
+async function sendToClientBoard(id) {
   const found = findCreative(id);
   const creative = found?.creative;
   if (!creative) return;
+  const cleared = await clearPortalResponseForCreative(found);
+  if (!cleared) return;
   creative.status = "clientReview";
   creative.sentToClientAt = Date.now();
   creative.updatedAt = Date.now();
@@ -4213,11 +4348,43 @@ function clientApproveCreative(id) {
   const found = findCreative(id);
   const creative = found?.creative;
   if (!creative) return;
+  if (isClientPortalRoute()) {
+    if (getPortalResponseForCreative(id)) return;
+    openPortalApprovalDialog(id);
+    return;
+  }
   creative.status = "scheduled";
   creative.clientApprovedAt = Date.now();
   creative.revisionAlert = "";
   creative.updatedAt = Date.now();
   completeCreativeMutation(found, "scheduled");
+}
+
+function openPortalApprovalDialog(id) {
+  const found = findCreative(id);
+  if (!found?.creative) return;
+  $("#approvalDialogHost").innerHTML = `
+    <div class="approval-dialog-backdrop" data-dialog-backdrop>
+      <div class="approval-dialog" role="dialog" aria-modal="true" aria-labelledby="portalApprovalTitle">
+        <div class="approval-dialog-head">
+          <div><strong id="portalApprovalTitle">Confirmar aprovação</strong><span>${esc(found.creative.title)}</span></div>
+          <button class="krio-icon-btn" type="button" data-action="closeDialog" aria-label="Fechar">${icons.close}</button>
+        </div>
+        <form id="portalApprovalForm" class="approval-form" data-id="${attr(id)}">
+          <p class="tracker-dialog-copy">Ao confirmar, a agência receberá sua decisão e seguirá com o agendamento.</p>
+          <div class="approval-dialog-actions">
+            <button class="krio-btn" type="button" data-action="closeDialog">Voltar</button>
+            <button class="krio-btn primary" type="submit">Confirmar aprovação</button>
+          </div>
+        </form>
+      </div>
+    </div>`;
+}
+
+async function savePortalApprovalForm(form) {
+  const found = findCreative(form.dataset.id);
+  if (!found?.creative) return;
+  await submitPortalResponse(found, "approved");
 }
 
 function openClientRejectionDialog(id) {
@@ -4249,6 +4416,10 @@ function saveClientRejectionForm(form) {
   if (!creative) return;
   const text = String(new FormData(form).get("comment") || "").trim();
   if (!text) return;
+  if (isClientPortalRoute()) {
+    submitPortalResponse(found, "changes_requested", text);
+    return;
+  }
   creative.status = "internalRejected";
   creative.revisionAlert = text;
   creative.revisionSource = "client";
@@ -4265,10 +4436,92 @@ function saveClientRejectionForm(form) {
   completeCreativeMutation(found, "internalRejected");
 }
 
-function markCreativeCorrected(id) {
+async function submitPortalResponse(found, decision, comment = "") {
+  const token = state.portalIndex?.token || state.route?.clientId;
+  if (!token || !found?.creative || !state.firebase?.db) return;
+  const response = {
+    id: found.creative.id,
+    creativeId: found.creative.id,
+    decision,
+    comment: String(comment || "").trim(),
+    createdAt: Date.now()
+  };
+  try {
+    await state.firebase.set(state.firebase.ref(state.firebase.db, `approvalPortals/${token}/responses/${response.id}`), response);
+    state.portalResponses[response.id] = response;
+    closeDialogs();
+    renderClientPortal();
+    setSyncState("online", "Retorno enviado à agência");
+  } catch (error) {
+    setSyncState("offline", "Não foi possível enviar seu retorno. Tente novamente.");
+  }
+}
+
+async function clearPortalResponseForCreative(found) {
+  const responseId = found?.creative?.id || "";
+  const token = found?.client?.portalToken || "";
+  if (!responseId) return false;
+  if (!token || !state.firebase?.db || state.demoMode || state.tenantId === "local") {
+    delete state.portalResponses[responseId];
+    return true;
+  }
+  try {
+    await state.firebase.set(state.firebase.ref(state.firebase.db, `approvalPortals/${token}/responses/${responseId}`), null);
+    delete state.portalResponses[responseId];
+    return true;
+  } catch (error) {
+    setSyncState("offline", "Não foi possível abrir um novo ciclo de revisão.");
+    return false;
+  }
+}
+
+function getPortalResponseForCreative(creativeId) {
+  return Object.values(state.portalResponses || {})
+    .filter((response) => response?.creativeId === creativeId)
+    .sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0))[0] || null;
+}
+
+function applyClientApproval(id, responseId = "") {
+  if (!canManageWorkspace()) return;
   const found = findCreative(id);
   const creative = found?.creative;
   if (!creative) return;
+  creative.status = "scheduled";
+  creative.clientApprovedAt = Date.now();
+  creative.revisionAlert = "";
+  creative.updatedAt = Date.now();
+  acknowledgePortalResponse(responseId);
+  completeCreativeMutation(found, "scheduled");
+}
+
+function applyClientRejection(id, responseId = "") {
+  if (!canManageWorkspace()) return;
+  const found = findCreative(id);
+  const creative = found?.creative;
+  const response = state.portalResponses?.[responseId];
+  if (!creative) return;
+  creative.status = "internalRejected";
+  creative.revisionAlert = response?.comment || "Ajuste solicitado pelo cliente.";
+  creative.revisionSource = "client";
+  creative.clientRejectedAt = Date.now();
+  creative.internalRejectedAt = Date.now();
+  creative.updatedAt = Date.now();
+  creative.comments ||= [];
+  creative.comments.push({ id: newId("comment"), author: found.client?.name || "Cliente", text: creative.revisionAlert, createdAt: Date.now() });
+  acknowledgePortalResponse(responseId);
+  completeCreativeMutation(found, "internalRejected");
+}
+
+function acknowledgePortalResponse(responseId) {
+  if (responseId && state.portalResponses?.[responseId]) {
+    state.portalResponses[responseId] = { ...state.portalResponses[responseId], appliedAt: Date.now() };
+  }
+}
+
+function markCreativeCorrected(id) {
+  const found = findCreative(id);
+  const creative = found?.creative;
+  if (!creative || !canManageCreative(found)) return;
   creative.status = "prov";
   creative.revisionAlert = "";
   creative.correctedAt = Date.now();
@@ -4472,6 +4725,7 @@ async function approveAccessRequest(uid) {
   const request = state.accessRequests.find((item) => item.uid === uid);
   if (!request) return;
   const now = Date.now();
+  const accessRole = ["creator", "member", "operations"].includes(request.role) ? request.role : "creator";
   const roleText = roleRequestLabel(request.role || "member");
   const color = colorFromString(request.email || request.userName || uid);
   const profile = {
@@ -4481,12 +4735,12 @@ async function approveAccessRequest(uid) {
     color,
     authUid: uid,
     accessUid: uid,
-    accessRole: "creator",
+    accessRole,
     assignedTypes: defaultAssignedDemandTypes(),
     createdAt: now
   };
   const membership = {
-    role: "creator",
+    role: accessRole,
     status: "active",
     tenantId: state.tenantId,
     updatedAt: now,
@@ -5164,15 +5418,17 @@ async function persistNow() {
   try {
     setSyncState("online", "Sincronizando...");
     const trashPayload = buildTrashPayload();
-    const payload = JSON.parse(JSON.stringify({
-      ...(canManageWorkspace() ? { [`tenants/${state.tenantId}/profiles`]: state.data.profiles } : {}),
-      [`tenants/${state.tenantId}/tracker/weeks`]: state.data.tracker.weeks,
-      [`tenants/${state.tenantId}/tracker/events`]: state.data.tracker.events || [],
-      ...(canManageWorkspace() ? { [`tenants/${state.tenantId}/approval`]: state.data.approval } : {}),
-      ...(canManageWorkspace() ? buildApprovalPortalPayload() : {}),
-      [canManageWorkspace() ? `tenants/${state.tenantId}/trash` : `tenants/${state.tenantId}/trash/${state.user.uid}`]: trashPayload,
-      [`tenants/${state.tenantId}/updatedAt`]: Date.now()
-    }));
+    const payload = canManageWorkspace()
+      ? {
+          [`tenants/${state.tenantId}/profiles`]: state.data.profiles,
+          [`tenants/${state.tenantId}/tracker/weeks`]: state.data.tracker.weeks,
+          [`tenants/${state.tenantId}/tracker/events`]: state.data.tracker.events || [],
+          [`tenants/${state.tenantId}/approval`]: state.data.approval,
+          ...buildApprovalPortalPayload(),
+          [`tenants/${state.tenantId}/trash`]: trashPayload,
+          [`tenants/${state.tenantId}/updatedAt`]: Date.now()
+        }
+      : buildCreatorPersistencePayload(trashPayload);
     await state.firebase.update(state.firebase.ref(state.firebase.db), payload);
     releaseLocalWrite(true);
     setSyncState("online", "Sincronizado");
@@ -5198,16 +5454,69 @@ function buildTrashPayload() {
 
 function buildApprovalPortalPayload() {
   return getClients().reduce((payload, client) => {
-    if (client.portalEnabled === false) return payload;
-    payload[`approvalPortals/${client.id}`] = {
+    if (client.portalEnabled === false || !client.portalToken) return payload;
+    const token = client.portalToken;
+    payload[`approvalPortals/${token}/meta`] = {
       tenantId: state.tenantId,
       clientId: client.id,
       clientName: client.name || "Cliente",
       workspaceName: state.tenantMeta?.name || state.data?.meta?.name || "Krio",
+      status: "active",
       updatedAt: Date.now()
     };
+    payload[`approvalPortals/${token}/client`] = buildPortalClientSnapshot(client);
     return payload;
   }, {});
+}
+
+function buildCreatorPersistencePayload(trashPayload) {
+  if (!isCreatorAccessRole() || !state.user?.uid) return {};
+  const personId = currentPersonId();
+  const payload = {
+    [`tenants/${state.tenantId}/trash/${state.user.uid}`]: trashPayload
+  };
+  state.data.tracker.weeks.forEach((week, index) => {
+    if (!week?.people?.[personId]) return;
+    payload[`tenants/${state.tenantId}/tracker/weeks/${index}/people/${personId}`] = week.people[personId];
+  });
+  return payload;
+}
+
+function buildPortalClientSnapshot(client) {
+  const reviewCardIds = {};
+  const groups = getApprovalGroups(client).reduce((acc, group) => {
+    const cards = getGroupCards(group)
+      .filter((creative) => ["clientReview", "scheduled", "posted", "internalRejected"].includes(normalizeApprovalStatus(creative.status)))
+      .map((creative) => {
+        const status = normalizeApprovalStatus(creative.status);
+        if (status === "clientReview") reviewCardIds[creative.id] = true;
+        return {
+          id: creative.id,
+          title: creative.title,
+          caption: creative.caption || "",
+          format: creative.format || "",
+          status,
+          media: getCreativeMedia(creative),
+          imageUrl: creative.imageUrl || "",
+          driveUrl: creative.driveUrl || "",
+          groupId: group.id,
+          clientApprovedAt: creative.clientApprovedAt || null,
+          clientRejectedAt: creative.clientRejectedAt || null,
+          postedAt: creative.postedAt || null,
+          updatedAt: creative.updatedAt || creative.createdAt || Date.now()
+        };
+      });
+    if (cards.length) acc[group.id] = { id: group.id, name: group.name, cards: collectionById(cards) };
+    return acc;
+  }, {});
+  return {
+    id: client.id,
+    name: client.name,
+    color: client.color,
+    logoUrl: client.logoUrl || "",
+    groups,
+    reviewCardIds
+  };
 }
 
 function collectionById(items) {
@@ -5411,6 +5720,8 @@ function normalizeWeek(week, profiles) {
         id: demand.id || newId("dem"),
         title: demand.title || "Demanda",
         client: demand.client || "",
+        clientId: demand.clientId || "",
+        briefingId: demand.briefingId || "",
         type: demand.type || type.id,
         dueDate: demand.dueDate || "",
         estimateMinutes: Number(demand.estimateMinutes || 0),
@@ -5488,6 +5799,7 @@ function normalizeApprovalClient(client = {}, id = newId("client")) {
     color: client.color || colorFromString(client.name || id),
     logoUrl: client.logoUrl || "",
     portalEnabled: client.portalEnabled !== false,
+    portalToken: client.portalToken || "",
     portalCreatedAt: client.portalCreatedAt || client.createdAt || Date.now(),
     portalUpdatedAt: client.portalUpdatedAt || client.updatedAt || Date.now(),
     briefings: asArray(client.briefings),
@@ -5520,6 +5832,8 @@ function normalizeApprovalClient(client = {}, id = newId("client")) {
         title: card.title || "Sem título",
         caption: card.caption || "",
         format: card.format || "Feed",
+        assigneeId: card.assigneeId || "",
+        demandId: card.demandId || "",
         status: normalizeApprovalStatus(card.status),
         media,
         imageUrl,
@@ -5757,12 +6071,30 @@ function getClient(id) {
 }
 
 function clientPortalUrl(client) {
-  const id = typeof client === "string" ? client : client?.id || "";
+  const id = typeof client === "string" ? client : client?.portalToken || "";
   const origin = window.location.origin && window.location.origin !== "null"
     ? window.location.origin
     : window.location.href.replace(/\/[^/]*$/, "");
   const suffix = state.demoMode ? "?demo=1" : "";
   return `${origin}/approval/${encodeURIComponent(id)}${suffix}`;
+}
+
+function createPortalToken() {
+  const bytes = new Uint8Array(24);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");
+}
+
+function ensureClientPortalTokens() {
+  if (!canManageWorkspace()) return false;
+  let changed = false;
+  getClients().forEach((client) => {
+    if (client.portalToken) return;
+    client.portalToken = createPortalToken();
+    client.portalUpdatedAt = Date.now();
+    changed = true;
+  });
+  return changed;
 }
 
 async function copyClientPortalLink(clientId) {
@@ -5775,6 +6107,21 @@ async function copyClientPortalLink(clientId) {
   } catch {
     window.prompt("Copie o link do portal", url);
   }
+}
+
+async function rotateClientPortalLink(clientId) {
+  if (!canManageWorkspace()) return;
+  const client = getClient(clientId);
+  if (!client) return;
+  const oldToken = client.portalToken;
+  client.portalToken = createPortalToken();
+  client.portalUpdatedAt = Date.now();
+  if (oldToken && state.firebase?.db && !state.demoMode && state.tenantId !== "local") {
+    await state.firebase.set(state.firebase.ref(state.firebase.db, `approvalPortals/${oldToken}`), null);
+  }
+  persist();
+  await copyClientPortalLink(client.id);
+  setSyncState("online", "Novo link gerado e copiado");
 }
 function getClientFolders() {
   return Object.values(state.data.approval.clientFolders || {}).map((folder) => ({
@@ -5973,30 +6320,14 @@ function getRefactionCreatives() {
     .flatMap((client) => getApprovalGroups(client).flatMap((group) => {
       return getGroupCards(group)
         .filter((creative) => normalizeApprovalStatus(creative.status) === "internalRejected")
+        .filter((creative) => canManageWorkspace() || creative.assigneeId === currentPersonId())
         .map((creative) => ({ client, group, groupId: group.id, creative }));
     }))
     .sort((a, b) => Number(b.creative.updatedAt || 0) - Number(a.creative.updatedAt || 0));
 }
 
 function syncPostedCreatives() {
-  const now = Date.now();
-  let changed = false;
-
-  getClients().forEach((client) => {
-    getApprovalGroups(client).forEach((group) => {
-      Object.values(group.cards || {}).forEach((creative) => {
-        if (normalizeApprovalStatus(creative.status) !== "scheduled") return;
-        if (!shouldAutoPostCreative(creative, now)) return;
-        creative.status = "posted";
-        creative.postedAt = creative.postedAt || Date.now();
-        creative.updatedAt = Date.now();
-        changed = true;
-      });
-    });
-  });
-
-  if (changed) persist();
-  return changed;
+  return false;
 }
 
 function scheduleSortKey(creative) {
@@ -6120,54 +6451,6 @@ function formatDateTime(value) {
   const date = new Date(value);
   const months = ["jan.", "fev.", "mar.", "abr.", "mai.", "jun.", "jul.", "ago.", "set.", "out.", "nov.", "dez."];
   return `${String(date.getDate()).padStart(2, "0")} de ${months[date.getMonth()]}, ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
-}
-
-function fileToDataUrl(file, options = {}) {
-  if (!file) return Promise.resolve("");
-  const maxSide = Number(options.maxSide || 1600);
-  const quality = Number(options.quality || 0.84);
-  const outputType = options.outputType || "";
-  const background = options.background || "";
-
-  const readRaw = () => new Promise((resolve) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ""));
-    reader.onerror = () => resolve("");
-    reader.readAsDataURL(file);
-  });
-
-  if (!file.type?.startsWith("image/")) return readRaw();
-
-  return new Promise((resolve) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const image = new Image();
-      image.onload = () => {
-        const scale = Math.min(1, maxSide / Math.max(image.width, image.height));
-        const width = Math.max(1, Math.round(image.width * scale));
-        const height = Math.max(1, Math.round(image.height * scale));
-        const canvas = document.createElement("canvas");
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext("2d");
-        if (!ctx) {
-          resolve(String(reader.result || ""));
-          return;
-        }
-        if (background) {
-          ctx.fillStyle = background;
-          ctx.fillRect(0, 0, width, height);
-        }
-        ctx.drawImage(image, 0, 0, width, height);
-        const type = outputType || (file.type === "image/png" || file.type === "image/webp" ? file.type : "image/jpeg");
-        resolve(canvas.toDataURL(type, quality));
-      };
-      image.onerror = () => resolve(String(reader.result || ""));
-      image.src = String(reader.result || "");
-    };
-    reader.onerror = () => resolve("");
-    reader.readAsDataURL(file);
-  });
 }
 
 function formatMonth(date) {
