@@ -23,8 +23,8 @@ if ($LASTEXITCODE -ne 0 -or -not ($firebaseLogin -match "@")) {
   throw "Firebase CLI nao esta logado. Rode npx.cmd firebase login e execute npm.cmd run release novamente."
 }
 
-Write-Step "Publicando regras do Realtime Database"
-Invoke-Checked "npx.cmd" @("firebase", "deploy", "--only", "database")
+Write-Step "Publicando regras do Realtime Database e Storage"
+Invoke-Checked "npx.cmd" @("firebase", "deploy", "--only", "database,storage")
 
 Write-Step "Publicando Hosting"
 Invoke-Checked "npx.cmd" @("firebase", "deploy", "--only", "hosting")

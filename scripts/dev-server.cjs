@@ -23,8 +23,9 @@ const server = http.createServer((request, response) => {
   let pathname = decodeURIComponent(url.pathname);
 
   if (pathname === "/") pathname = "/index.html";
-  if (pathname.startsWith("/approval/") && !path.extname(pathname)) pathname = "/app.html";
-  if (pathname === "/app") pathname = "/app.html";
+  if (pathname.startsWith("/approval/") && !path.extname(pathname)) pathname = "/app/index.html";
+  if (pathname === "/app" || pathname === "/app/") pathname = "/app/index.html";
+  if (pathname.startsWith("/app/") && !path.extname(pathname)) pathname = "/app/index.html";
   if (pathname === "/login") pathname = "/index.html";
 
   const filePath = path.join(root, pathname.slice(1));

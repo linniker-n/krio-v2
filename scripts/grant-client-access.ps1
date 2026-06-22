@@ -49,6 +49,9 @@ $profiles[$Uid] = @{
   role = "Owner"
   color = "#3B82F6"
   authUid = $Uid
+  accessUid = $Uid
+  accessRole = "admin"
+  assignedTypes = @("mensal", "avulso", "aprovacao", "agendamento", "planejamento")
   createdAt = $now
 }
 
@@ -82,6 +85,7 @@ $tenant = @{
   profiles = $profiles
   tracker = @{
     weeks = @()
+    events = @()
     trash = @()
   }
   approval = @{

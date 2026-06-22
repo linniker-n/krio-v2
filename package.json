@@ -16,7 +16,7 @@
     "access:revoke": "powershell -ExecutionPolicy Bypass -File scripts/revoke-client-access.ps1",
     "deploy": "firebase deploy",
     "deploy:hosting": "firebase deploy --only hosting",
-    "deploy:rules": "firebase deploy --only database"
+    "deploy:rules": "firebase deploy --only database,storage"
   },
   "devDependencies": {
     "firebase-tools": "^15.15.0",
